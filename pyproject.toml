@@ -1,0 +1,23 @@
+[project]
+name = "oracle-exploration-planner"
+version = "0.1.0"
+description = "Oracle exploration map, path, trajectory, and Isaac replay utilities for known Infinigen/Isaac Sim scenes."
+readme = "docs/EXPLORATION_ORACLE_PIPELINE.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pillow>=10",
+]
+scipy = [
+    "scipy>=1.10",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
