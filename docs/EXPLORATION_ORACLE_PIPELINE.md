@@ -19,6 +19,7 @@ The current non-Isaac foundation contains:
 - Dense path stitching with A*.
 - Trajectory records with `base_pose_world`, `velocity_cmd`, `discrete_action`, `next_waypoint`, and coverage progress fields.
 - QA checks for nonempty map layers, reachable cells, path validity, trajectory presence, coverage threshold, and debug image existence.
+- Blender geometry rasterization for seed_16 via `scripts/build_oracle_map_blender.py`.
 
 Isaac Sim replay is implemented in `scripts/replay_path_collect_rgbd_isaac.py`. The script supports `--dry-run` with normal Python and imports Isaac Sim packages only when real rendering/collection is requested.
 
@@ -33,12 +34,34 @@ Isaac Sim replay is implemented in `scripts/replay_path_collect_rgbd_isaac.py`. 
 
 ## Seed 16 Plan
 
-For seed 16, the first map-building pass should:
+For seed 16, the primary map-building route is Blender geometry extraction:
+
+```bash
+blender -b "../infinigen/outputs/production_9950x3d_isaac_queue_seed1_40/seed_16/coarse/scene.blend" \
+  --python scripts/build_oracle_map_blender.py -- \
+  --scene-root "../infinigen/outputs/production_9950x3d_isaac_queue_seed1_40/seed_16" \
+  --out "outputs/exploration_dataset/seed_16_test/oracle_map_blender" \
+  --resolution 0.05 \
+  --robot-radius 0.30
+```
+
+This backend:
+
+1. Uses `unique_assets:room_floor` geometry and rugs as floor/free candidates.
+2. Uses room wall/skirting mesh edges as wall obstacles.
+3. Uses conservative world AABB footprints for furniture and large static objects.
+4. Ignores ceiling, placeholders, mounted wall/window objects, lights/cameras, and tiny decorative objects.
+5. Writes `fallback_used=false` when the Blender geometry path succeeds.
+
+The older metadata-only fallback remains available only for plumbing tests. Fallback coverage must not be reported as a real seed_16 result.
+
+For seed 16, the map builder should:
 
 1. Inspect `solve_state.json`, `MaskTag.json`, export logs, and the USDC path discovered in `docs/SCENE_16_INVENTORY.md`.
-2. Prefer exact USD/Blender geometry when a suitable reader is available.
-3. Fall back to an explicitly marked conservative map if metadata does not include metric room polygons and no geometry reader is available.
-4. Write generated artifacts under `outputs/exploration_dataset/seed_16_test`, which is ignored by Git.
+2. Prefer Blender geometry from `coarse/scene.blend`.
+3. Use USD/PXR only when `pxr` is available.
+4. Fall back to an explicitly marked conservative map only when geometry readers are unavailable.
+5. Write generated artifacts under `outputs/exploration_dataset/seed_16_test`, which is ignored by Git.
 
 The key source scene path is:
 
@@ -53,7 +76,9 @@ Map artifacts:
 - `reachable_mask.npy`
 - `map_meta.json`
 - `source_files.json`
+- `object_classification_summary.json`
 - `debug_topdown_map.png`
+- `debug_object_footprints.png`
 
 Trajectory artifacts:
 
@@ -74,7 +99,7 @@ Dry-run command:
 python scripts/replay_path_collect_rgbd_isaac.py \
   --scene-usd auto \
   --usd-dir "../infinigen/outputs/production_9950x3d_isaac_queue_seed1_40/seed_16/usd" \
-  --trajectory "outputs/exploration_dataset/seed_16_test/trajectory/dense_trajectory.jsonl" \
+  --trajectory "outputs/exploration_dataset/seed_16_test/trajectory_blender/dense_trajectory.jsonl" \
   --out "outputs/exploration_dataset/seed_16_test" \
   --robot auto \
   --dry-run \
@@ -86,7 +111,7 @@ Isaac Sim smoke-test template:
 ```bash
 "/path/to/isaacsim/python.sh" scripts/replay_path_collect_rgbd_isaac.py \
   --scene-usd "../infinigen/outputs/production_9950x3d_isaac_queue_seed1_40/seed_16/usd/export_scene.blend/export_scene.usdc" \
-  --trajectory "outputs/exploration_dataset/seed_16_test/trajectory/dense_trajectory.jsonl" \
+  --trajectory "outputs/exploration_dataset/seed_16_test/trajectory_blender/dense_trajectory.jsonl" \
   --out "outputs/exploration_dataset/seed_16_test" \
   --robot auto \
   --camera-width 640 \
@@ -106,3 +131,5 @@ Expected collection outputs:
 - `debug/`
 
 If `--robot auto` cannot resolve a Nova Carter, Carter, or TurtleBot asset from the Isaac assets root, pass `--robot-usd` explicitly.
+
+Isaac Core `camera.get_world_pose()` is treated as returning quaternion orientation in `wxyz` order, which is saved directly in `frame_manifest.jsonl`. If a specific Isaac version returns `xyzw`, pass `--camera-quaternion-convention xyzw` to convert manifest output to `wxyz`. Missing depth or distance annotator output is now a hard error rather than silently saving invalid `.npy` files.

@@ -51,6 +51,13 @@ def qa_map_path(
     final_coverage: float | None = None,
     coverage_threshold: float | None = None,
     debug_pngs: Sequence[str | Path] | None = None,
+    fallback_used: bool | None = None,
+    fallback_allowed: bool = True,
+    min_reachable_cells: int | None = None,
+    min_reachable_ratio: float | None = None,
+    occupancy_ratio_bounds: tuple[float, float] | None = None,
+    traversable_ratio_bounds: tuple[float, float] | None = None,
+    object_summary_path: str | Path | None = None,
 ) -> QAReport:
     errors: list[str] = []
     warnings: list[str] = []
@@ -66,6 +73,53 @@ def qa_map_path(
             "traversable_true_cells": traversable_count,
         }
     )
+
+    grid_size = 0
+    if occupancy_grid is not None:
+        grid_size = int(np.asarray(occupancy_grid).size)
+        metrics["grid_cells"] = grid_size
+    if grid_size > 0:
+        occupancy_ratio = occupancy_count / grid_size
+        traversable_ratio = traversable_count / grid_size
+        reachable_ratio = reachable_count / grid_size
+        metrics.update(
+            {
+                "occupancy_ratio": occupancy_ratio,
+                "reachable_ratio": reachable_ratio,
+                "traversable_ratio": traversable_ratio,
+            }
+        )
+        if occupancy_ratio_bounds is not None:
+            lo, hi = occupancy_ratio_bounds
+            if not (lo <= occupancy_ratio <= hi):
+                errors.append(
+                    f"occupancy ratio {occupancy_ratio:.6f} outside bounds [{lo:.6f}, {hi:.6f}]"
+                )
+        if traversable_ratio_bounds is not None:
+            lo, hi = traversable_ratio_bounds
+            if not (lo <= traversable_ratio <= hi):
+                errors.append(
+                    f"traversable ratio {traversable_ratio:.6f} outside bounds [{lo:.6f}, {hi:.6f}]"
+                )
+        if min_reachable_ratio is not None and reachable_ratio < min_reachable_ratio:
+            errors.append(
+                f"reachable ratio {reachable_ratio:.6f} below minimum {min_reachable_ratio:.6f}"
+            )
+
+    if min_reachable_cells is not None and reachable_count < min_reachable_cells:
+        errors.append(f"reachable cells {reachable_count} below minimum {min_reachable_cells}")
+
+    if fallback_used is not None:
+        metrics["fallback_used"] = bool(fallback_used)
+        if fallback_used and not fallback_allowed:
+            errors.append("fallback_used=true is not allowed for this QA run")
+
+    if object_summary_path is not None:
+        summary = Path(object_summary_path)
+        if not summary.exists():
+            errors.append(f"object classification summary missing: {summary}")
+        else:
+            metrics["object_classification_summary"] = summary.as_posix()
 
     path_list = [(int(c[0]), int(c[1])) for c in path]
     metrics["path_cells"] = len(path_list)
@@ -101,4 +155,3 @@ def qa_map_path(
             metrics.setdefault("debug_pngs", []).append(path_obj.as_posix())
 
     return QAReport(passed=not errors, errors=errors, warnings=warnings, metrics=metrics)
-

@@ -42,6 +42,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camera-width", type=int, default=640)
     parser.add_argument("--camera-height", type=int, default=480)
     parser.add_argument("--camera-height-m", type=float, default=1.25)
+    parser.add_argument(
+        "--camera-quaternion-convention",
+        choices=("wxyz", "xyzw"),
+        default="wxyz",
+        help="Convention returned by Isaac camera.get_world_pose(); Isaac Core defaults to wxyz.",
+    )
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -120,9 +126,15 @@ def run_dry_run(args: argparse.Namespace) -> dict[str, Any]:
     return report
 
 
-def _yaw_to_quat_wxyz(yaw: float) -> list[float]:
-    half = 0.5 * yaw
-    return [math.cos(half), 0.0, 0.0, math.sin(half)]
+def _quat_to_wxyz(quat: Any, convention: str) -> list[float]:
+    vals = [float(v) for v in quat]
+    if len(vals) != 4:
+        raise ValueError(f"Expected quaternion with 4 values, got {vals}")
+    if convention == "wxyz":
+        return vals
+    if convention == "xyzw":
+        return [vals[3], vals[0], vals[1], vals[2]]
+    raise ValueError(f"Unsupported quaternion convention: {convention}")
 
 
 def _intrinsics_from_camera(camera: Any, width: int, height: int) -> dict[str, float | int]:
@@ -141,12 +153,25 @@ def _intrinsics_from_camera(camera: Any, width: int, height: int) -> dict[str, f
     return {"cx": width / 2.0, "cy": height / 2.0, "fx": fx, "fy": fy, "height": height, "width": width}
 
 
+def _asset_path_exists(path: str) -> bool:
+    local = Path(path)
+    if local.exists():
+        return True
+    try:
+        import omni.client
+
+        result, _ = omni.client.stat(path)
+        return str(result).endswith("OK") or int(result) == 0
+    except Exception:
+        return False
+
+
 def _resolve_robot_usd(robot: str, robot_usd: str | None) -> str:
     if robot_usd:
         path = Path(robot_usd)
         if path.exists():
             return path.as_posix()
-        if "://" in robot_usd:
+        if "://" in robot_usd and _asset_path_exists(robot_usd):
             return robot_usd
         raise FileNotFoundError(f"--robot-usd does not exist: {robot_usd}")
     if robot == "none":
@@ -171,7 +196,13 @@ def _resolve_robot_usd(robot: str, robot_usd: str | None) -> str:
         f"{assets_root}/Isaac/Robots/Carter/carter_v1.usd",
         f"{assets_root}/Isaac/Robots/Turtlebot/turtlebot.usd",
     ]
-    return candidates[0]
+    for candidate in candidates:
+        if _asset_path_exists(candidate):
+            return candidate
+    raise FileNotFoundError(
+        "--robot auto could not find an existing robot USD. "
+        f"Checked: {candidates}. Pass --robot-usd explicitly."
+    )
 
 
 def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
@@ -223,8 +254,8 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
         intrinsics = _intrinsics_from_camera(camera, args.camera_width, args.camera_height)
         for local_idx, row in enumerate(rows):
             x, y, yaw = [float(v) for v in row["base_pose_world"]]
-            quat_xyzw = euler_angles_to_quat(np.array([0.0, 0.0, yaw]))
-            robot.set_world_pose(position=np.array([x, y, 0.0]), orientation=quat_xyzw)
+            quat_wxyz = euler_angles_to_quat(np.array([0.0, 0.0, yaw]))
+            robot.set_world_pose(position=np.array([x, y, 0.0]), orientation=quat_wxyz)
             world.step(render=True)
             frame = camera.get_current_frame()
 
@@ -244,7 +275,15 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
                 depth = frame.get("depth")
             distance = frame.get("distance_to_camera")
             if distance is None:
-                distance = depth
+                raise RuntimeError(
+                    "Camera did not return distance_to_camera. "
+                    "Ensure the distance-to-camera annotator is enabled in Isaac Sim."
+                )
+            if depth is None:
+                raise RuntimeError(
+                    "Camera did not return depth/distance_to_image_plane. "
+                    "Ensure the depth annotator is enabled in Isaac Sim."
+                )
             depth_rel = f"sensors/depth/{local_idx:06d}.npy"
             distance_rel = f"sensors/distance_to_camera/{local_idx:06d}.npy"
             np.save(paths["root"] / depth_rel, np.asarray(depth, dtype=np.float32))
@@ -257,7 +296,10 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
                     "camera_intrinsics": intrinsics,
                     "camera_pose_world": {
                         "position": [float(v) for v in cam_pos],
-                        "quaternion_wxyz": _yaw_to_quat_wxyz(yaw),
+                        "quaternion_wxyz": _quat_to_wxyz(
+                            cam_quat,
+                            args.camera_quaternion_convention,
+                        ),
                     },
                     "coverage_ratio": row.get("coverage_ratio"),
                     "depth_path": depth_rel,

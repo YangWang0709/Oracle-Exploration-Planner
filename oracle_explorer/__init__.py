@@ -6,6 +6,7 @@ __all__ = [
     "io_utils",
     "mapping",
     "metadata_parser",
+    "object_classification",
     "planning",
     "qa",
     "trajectory",
