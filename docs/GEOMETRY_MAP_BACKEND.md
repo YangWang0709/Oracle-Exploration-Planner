@@ -66,6 +66,14 @@ Planner output on this map:
 - Final coverage: `0.9837496238338851`
 - Debug path: `outputs/exploration_dataset/seed_16_test/trajectory_blender/debug_topdown_path.png`
 
+Isaac replay smoke-test result:
+
+- Trajectory replayed: `outputs/exploration_dataset/seed_16_test/trajectory_blender/dense_trajectory.jsonl`
+- Frames rendered: `10`
+- RGB/depth/`distance_to_camera` counts: `10 / 10 / 10`
+- QA status: passed
+- Robot asset status: `xform_fallback`; valid only for camera replay smoke testing, not final robot data.
+
 ## USD/PXR Backend
 
 `oracle_explorer/usd_geometry.py` and `scripts/build_oracle_map_usd.py` keep the USD route explicit. In the current normal Python environment, `pxr` is unavailable, so the USD backend was not used. If USD Python bindings are installed later, the USD backend can traverse mesh prims and add a second geometry route from `export_scene.usdc`.
@@ -77,4 +85,3 @@ Planner output on this map:
 - Small decorative objects are ignored by design; this is appropriate for mobile-base traversability but not for fine contact planning.
 - Mounted wall/window objects are ignored because walls already define traversability boundaries.
 - The current map is 2D and does not model robot height, ramps, dynamic doors, or articulation.
-

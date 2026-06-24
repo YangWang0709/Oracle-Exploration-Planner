@@ -8,9 +8,12 @@ packages are imported only inside the real collection path.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import math
+import os
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +31,15 @@ AUTO_ROBOT_HINTS = [
     "Nova Carter: <Isaac assets root>/Isaac/Robots/Nova_Carter/nova_carter.usd",
     "Carter: <Isaac assets root>/Isaac/Robots/Carter/carter_v1.usd",
     "TurtleBot: <Isaac assets root>/Isaac/Robots/Turtlebot/turtlebot.usd",
+]
+
+ROBOT_RELATIVE_CANDIDATES = [
+    "Isaac/Robots/Nova_Carter/nova_carter.usd",
+    "Isaac/Robots/Carter/carter_v1.usd",
+    "Isaac/Robots/Turtlebot/turtlebot.usd",
+    "Robots/Nova_Carter/nova_carter.usd",
+    "Robots/Carter/carter_v1.usd",
+    "Robots/Turtlebot/turtlebot.usd",
 ]
 
 
@@ -60,7 +72,7 @@ def resolve_scene_usd(scene_usd: str, usd_dir: str | None) -> Path:
         path = Path(scene_usd)
         if not path.exists():
             raise FileNotFoundError(f"Scene USD does not exist: {path}")
-        return path
+        return path.resolve()
     if usd_dir is None:
         raise ValueError("--usd-dir is required when --scene-usd auto is used")
     root = Path(usd_dir)
@@ -72,8 +84,8 @@ def resolve_scene_usd(scene_usd: str, usd_dir: str | None) -> Path:
     for name in ("scene.usdc", "scene.usd", "export_scene.usdc", "export_scene.usd"):
         for candidate in candidates:
             if candidate.name == name:
-                return candidate
-    return candidates[0]
+                return candidate.resolve()
+    return candidates[0].resolve()
 
 
 def load_trajectory(path: str | Path, max_frames: int | None = None) -> list[dict[str, Any]]:
@@ -101,11 +113,11 @@ def output_paths(out_root: str | Path) -> dict[str, Path]:
 
 def run_dry_run(args: argparse.Namespace) -> dict[str, Any]:
     scene_path = resolve_scene_usd(args.scene_usd, args.usd_dir)
-    trajectory_path = Path(args.trajectory)
+    trajectory_path = Path(args.trajectory).resolve()
     if not trajectory_path.exists():
         raise FileNotFoundError(f"Trajectory file does not exist: {trajectory_path}")
     rows = load_trajectory(trajectory_path, args.max_frames)
-    paths = output_paths(args.out)
+    paths = output_paths(Path(args.out).resolve())
     report = {
         "camera": {
             "height": args.camera_height,
@@ -153,6 +165,173 @@ def _intrinsics_from_camera(camera: Any, width: int, height: int) -> dict[str, f
     return {"cx": width / 2.0, "cy": height / 2.0, "fx": fx, "fy": fy, "height": height, "width": width}
 
 
+def _normalize_rgb_frame(rgb: Any, width: int, height: int) -> np.ndarray:
+    arr = np.asarray(rgb)
+    arr = np.squeeze(arr)
+    if arr.ndim == 1:
+        if arr.size == height * width * 4:
+            arr = arr.reshape((height, width, 4))
+        elif arr.size == height * width * 3:
+            arr = arr.reshape((height, width, 3))
+    if arr.ndim == 3 and arr.shape[0] in (3, 4) and arr.shape[1:] == (height, width):
+        arr = np.transpose(arr, (1, 2, 0))
+    if arr.ndim == 3 and arr.shape[:2] == (width, height):
+        arr = np.transpose(arr, (1, 0, 2))
+    if arr.ndim != 3 or arr.shape[2] not in (3, 4):
+        raise RuntimeError(f"RGB frame has unsupported shape {arr.shape}; expected HxWx3/4.")
+    if arr.shape[:2] != (height, width):
+        raise RuntimeError(f"RGB frame has shape {arr.shape}; expected {(height, width, arr.shape[2])}.")
+    if arr.shape[2] == 4:
+        arr = arr[..., :3]
+    if arr.dtype.kind == "f" and np.nanmax(arr) <= 1.0:
+        arr = arr * 255.0
+    return np.ascontiguousarray(np.clip(arr, 0, 255).astype(np.uint8))
+
+
+def _normalize_depth_frame(frame: Any, width: int, height: int, name: str) -> np.ndarray:
+    arr = np.asarray(frame, dtype=np.float32)
+    arr = np.squeeze(arr)
+    if arr.ndim == 1 and arr.size == height * width:
+        arr = arr.reshape((height, width))
+    if arr.ndim == 3 and arr.shape[-1] == 1:
+        arr = arr[..., 0]
+    if arr.ndim == 2 and arr.shape == (width, height):
+        arr = arr.T
+    if arr.ndim != 2 or arr.shape != (height, width):
+        raise RuntimeError(f"{name} frame has shape {arr.shape}; expected {(height, width)}.")
+    return np.ascontiguousarray(arr.astype(np.float32))
+
+
+def _run_async(coro: Any) -> Any:
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    if loop.is_running():
+        raise RuntimeError("Cannot wait for Isaac render frames while the asyncio event loop is already running.")
+    return loop.run_until_complete(coro)
+
+
+def _render_camera_frames(camera: Any, count: int) -> None:
+    try:
+        import omni.syntheticdata.sensors
+
+        _run_async(
+            omni.syntheticdata.sensors.next_render_simulation_async(
+                camera.get_render_product_path(),
+                int(count),
+            )
+        )
+    except Exception:
+        return
+
+
+def _frame_value_is_nonempty(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, dict) and "data" in value:
+        value = value["data"]
+    try:
+        return np.asarray(value).size > 0
+    except Exception:
+        return False
+
+
+def _extract_camera_frame(camera: Any, max_attempts: int = 12) -> tuple[dict[str, Any], Any, Any, Any]:
+    last_keys: list[str] = []
+    for _ in range(max_attempts):
+        _render_camera_frames(camera, 1)
+        frame = camera.get_current_frame()
+        last_keys = sorted(frame.keys())
+        rgb = frame.get("rgb")
+        if rgb is None:
+            rgb = frame.get("rgba")
+        if rgb is None and hasattr(camera, "get_rgba"):
+            rgb = camera.get_rgba()
+        depth = frame.get("distance_to_image_plane")
+        if depth is None:
+            depth = frame.get("depth")
+        distance = frame.get("distance_to_camera")
+        if all(_frame_value_is_nonempty(value) for value in (rgb, depth, distance)):
+            return frame, rgb, depth, distance
+    raise RuntimeError(f"Camera annotators did not return nonempty RGB-D data after {max_attempts} attempts; keys={last_keys}")
+
+
+def _create_replicator_annotators(render_product_path: str) -> dict[str, Any]:
+    import omni.replicator.core as rep
+
+    annotators = {
+        "depth": rep.AnnotatorRegistry.get_annotator("distance_to_image_plane", device="cpu"),
+        "distance": rep.AnnotatorRegistry.get_annotator("distance_to_camera", device="cpu"),
+        "rgb": rep.AnnotatorRegistry.get_annotator("rgb", device="cpu"),
+    }
+    for annotator in annotators.values():
+        annotator.attach([render_product_path])
+    return annotators
+
+
+def _annotator_data(annotator: Any) -> Any:
+    data = annotator.get_data()
+    if isinstance(data, dict) and "data" in data:
+        return data["data"]
+    return data
+
+
+def _extract_replicator_frame(
+    annotators: dict[str, Any],
+    world: Any,
+    max_attempts: int = 12,
+) -> tuple[Any, Any, Any]:
+    last_shapes: dict[str, Any] = {}
+    for _ in range(max_attempts):
+        world.render()
+        rgb = _annotator_data(annotators["rgb"])
+        depth = _annotator_data(annotators["depth"])
+        distance = _annotator_data(annotators["distance"])
+        last_shapes = {
+            "depth": getattr(np.asarray(depth), "shape", None) if depth is not None else None,
+            "distance_to_camera": getattr(np.asarray(distance), "shape", None) if distance is not None else None,
+            "rgb": getattr(np.asarray(rgb), "shape", None) if rgb is not None else None,
+        }
+        if all(_frame_value_is_nonempty(value) for value in (rgb, depth, distance)):
+            return rgb, depth, distance
+    raise RuntimeError(
+        "Replicator annotators did not return nonempty RGB-D data "
+        f"after {max_attempts} attempts; shapes={last_shapes}"
+    )
+
+
+def _add_smoke_test_light() -> None:
+    try:
+        import omni.usd
+        from pxr import UsdLux
+
+        stage = omni.usd.get_context().get_stage()
+        distant_light = UsdLux.DistantLight.Define(stage, "/World/OracleReplayDistantLight")
+        distant_light.CreateIntensityAttr(25000.0)
+        distant_light.CreateAngleAttr(1.0)
+    except Exception:
+        return
+
+
+def _add_camera_fill_light(parent_prim_path: str, camera_height_m: float) -> None:
+    try:
+        import omni.usd
+        from pxr import UsdGeom, UsdLux
+
+        stage = omni.usd.get_context().get_stage()
+        light_path = f"{parent_prim_path}/OracleReplayCameraFillLight"
+        light = UsdLux.SphereLight.Define(stage, light_path)
+        light.CreateIntensityAttr(250000.0)
+        light.CreateRadiusAttr(5.0)
+        xform = UsdGeom.Xformable(light.GetPrim())
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set((0.0, 0.0, float(camera_height_m)))
+    except Exception:
+        return
+
+
 def _asset_path_exists(path: str) -> bool:
     local = Path(path)
     if local.exists():
@@ -166,48 +345,158 @@ def _asset_path_exists(path: str) -> bool:
         return False
 
 
-def _resolve_robot_usd(robot: str, robot_usd: str | None) -> str:
+def _import_simulation_app() -> Any:
+    try:
+        from isaacsim import SimulationApp
+
+        return SimulationApp
+    except Exception:
+        from omni.isaac.kit import SimulationApp
+
+        return SimulationApp
+
+
+def _import_isaac_runtime() -> dict[str, Any]:
+    try:
+        from isaacsim.core.api import World
+        from isaacsim.core.prims import SingleXFormPrim
+        from isaacsim.core.utils.prims import define_prim
+        from isaacsim.core.utils.rotations import euler_angles_to_quat
+        from isaacsim.core.utils.stage import add_reference_to_stage, open_stage
+        from isaacsim.sensors.camera import Camera
+
+        return {
+            "Camera": Camera,
+            "RobotPrim": SingleXFormPrim,
+            "World": World,
+            "add_reference_to_stage": add_reference_to_stage,
+            "define_prim": define_prim,
+            "euler_angles_to_quat": euler_angles_to_quat,
+            "open_stage": open_stage,
+        }
+    except Exception:
+        from omni.isaac.core import World
+        from omni.isaac.core.prims import XFormPrim
+        from omni.isaac.core.utils.prims import define_prim
+        from omni.isaac.core.utils.rotations import euler_angles_to_quat
+        from omni.isaac.core.utils.stage import add_reference_to_stage, open_stage
+        from omni.isaac.sensor import Camera
+
+        return {
+            "Camera": Camera,
+            "RobotPrim": XFormPrim,
+            "World": World,
+            "add_reference_to_stage": add_reference_to_stage,
+            "define_prim": define_prim,
+            "euler_angles_to_quat": euler_angles_to_quat,
+            "open_stage": open_stage,
+        }
+
+
+def _candidate_asset_roots() -> list[Path]:
+    roots: list[Path] = []
+    for key in ("ISAAC_PATH", "ISAACSIM_PATH", "OV_ASSET_ROOT"):
+        value = os.environ.get(key)
+        if value:
+            roots.append(Path(value))
+    roots.extend(
+        [
+            Path.home() / "isaacsim",
+            Path.home() / "isaac-sim",
+            Path.home() / "IsaacLab" / "_isaac_sim",
+            Path.home() / ".local" / "share" / "ov" / "pkg",
+            Path(sys.executable).resolve().parents[1],
+        ]
+    )
+    seen: set[Path] = set()
+    existing: list[Path] = []
+    for root in roots:
+        try:
+            resolved = root.resolve()
+        except OSError:
+            continue
+        if resolved in seen or not resolved.exists():
+            continue
+        seen.add(resolved)
+        existing.append(resolved)
+    return existing
+
+
+def _find_local_robot_usd() -> str | None:
+    for root in _candidate_asset_roots():
+        for rel_path in ROBOT_RELATIVE_CANDIDATES:
+            candidate = root / rel_path
+            if candidate.exists():
+                return candidate.as_posix()
+
+    name_patterns = ("*nova*carter*.usd", "*carter*.usd", "*turtlebot*.usd")
+    for root in _candidate_asset_roots():
+        try:
+            for pattern in name_patterns:
+                matches = sorted(root.rglob(pattern))
+                if matches:
+                    return matches[0].as_posix()
+        except (OSError, PermissionError):
+            continue
+    return None
+
+
+def _get_assets_root_path() -> str | None:
+    for module_name in (
+        "isaacsim.core.utils.nucleus",
+        "isaacsim.storage.native.nucleus",
+        "omni.isaac.core.utils.nucleus",
+    ):
+        try:
+            module = __import__(module_name, fromlist=["get_assets_root_path"])
+            return module.get_assets_root_path()
+        except Exception:
+            continue
+    return None
+
+
+def _resolve_robot_usd(robot: str, robot_usd: str | None) -> tuple[str, str, str | None]:
     if robot_usd:
         path = Path(robot_usd)
         if path.exists():
-            return path.as_posix()
+            return path.as_posix(), "explicit_robot_usd", None
         if "://" in robot_usd and _asset_path_exists(robot_usd):
-            return robot_usd
+            return robot_usd, "explicit_robot_usd", None
         raise FileNotFoundError(f"--robot-usd does not exist: {robot_usd}")
     if robot == "none":
-        return ""
+        return "", "xform_fallback", "Robot disabled; using a minimal Xform camera rig."
 
-    try:
-        from omni.isaac.core.utils.nucleus import get_assets_root_path
-    except Exception as exc:
-        raise RuntimeError(
-            "Cannot resolve --robot auto because Isaac asset helpers are unavailable. "
-            "Pass --robot-usd with a Nova Carter, Carter, or TurtleBot USD path."
-        ) from exc
-
-    assets_root = get_assets_root_path()
-    if not assets_root:
-        raise RuntimeError(
-            "Isaac assets root could not be resolved. Pass --robot-usd explicitly. "
-            f"Suggested assets: {AUTO_ROBOT_HINTS}"
-        )
-    candidates = [
-        f"{assets_root}/Isaac/Robots/Nova_Carter/nova_carter.usd",
-        f"{assets_root}/Isaac/Robots/Carter/carter_v1.usd",
-        f"{assets_root}/Isaac/Robots/Turtlebot/turtlebot.usd",
-    ]
+    candidates: list[str] = []
+    assets_root = _get_assets_root_path()
+    if assets_root:
+        candidates.extend(f"{assets_root.rstrip('/')}/{rel_path}" for rel_path in ROBOT_RELATIVE_CANDIDATES)
+    local_candidate = _find_local_robot_usd()
+    if local_candidate:
+        candidates.append(local_candidate)
     for candidate in candidates:
         if _asset_path_exists(candidate):
-            return candidate
-    raise FileNotFoundError(
-        "--robot auto could not find an existing robot USD. "
-        f"Checked: {candidates}. Pass --robot-usd explicitly."
+            return candidate, "auto_robot_asset", None
+
+    warning = (
+        "--robot auto could not find a Nova Carter, Carter, or TurtleBot USD. "
+        "Using a minimal Xform camera rig for replay smoke testing only; do not treat this as final robot data."
     )
+    return "", "xform_fallback", warning
+
+
+def _set_robot_pose(robot: Any, position: np.ndarray, orientation: np.ndarray) -> None:
+    if hasattr(robot, "set_world_pose"):
+        robot.set_world_pose(position=position, orientation=orientation)
+        return
+    if hasattr(robot, "set_world_poses"):
+        robot.set_world_poses(positions=np.expand_dims(position, axis=0), orientations=np.expand_dims(orientation, axis=0))
+        return
+    raise AttributeError(f"Robot prim wrapper does not expose a world-pose setter: {type(robot)!r}")
 
 
 def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
     try:
-        from omni.isaac.kit import SimulationApp
+        SimulationApp = _import_simulation_app()
     except Exception as exc:
         raise RuntimeError(
             "Isaac Sim Python packages are not available in this interpreter. "
@@ -215,27 +504,38 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
         ) from exc
 
     scene_path = resolve_scene_usd(args.scene_usd, args.usd_dir)
-    trajectory_path = Path(args.trajectory)
+    trajectory_path = Path(args.trajectory).resolve()
     rows = load_trajectory(trajectory_path, args.max_frames)
-    paths = output_paths(args.out)
+    paths = output_paths(Path(args.out).resolve())
 
     simulation_app = SimulationApp({"headless": bool(args.headless)})
     try:
-        from omni.isaac.core import World
-        from omni.isaac.core.prims import XFormPrim
-        from omni.isaac.core.utils.rotations import euler_angles_to_quat
-        from omni.isaac.core.utils.stage import add_reference_to_stage, open_stage
-        from omni.isaac.sensor import Camera
+        runtime = _import_isaac_runtime()
+        World = runtime["World"]
+        RobotPrim = runtime["RobotPrim"]
+        add_reference_to_stage = runtime["add_reference_to_stage"]
+        define_prim = runtime["define_prim"]
+        euler_angles_to_quat = runtime["euler_angles_to_quat"]
+        open_stage = runtime["open_stage"]
+        Camera = runtime["Camera"]
 
-        open_stage(scene_path.as_posix())
+        scene_loaded = open_stage(scene_path.as_posix())
+        if scene_loaded is False:
+            raise RuntimeError(f"Isaac Sim failed to open scene USD: {scene_path}")
+        _add_smoke_test_light()
         world = World(stage_units_in_meters=1.0)
         world.reset()
+        if hasattr(world, "play"):
+            world.play()
 
         robot_prim_path = "/World/OracleReplayRobot"
-        robot_asset = _resolve_robot_usd(args.robot, args.robot_usd)
+        robot_asset, robot_asset_source, robot_warning = _resolve_robot_usd(args.robot, args.robot_usd)
         if robot_asset:
             add_reference_to_stage(robot_asset, robot_prim_path)
-        robot = XFormPrim(robot_prim_path)
+        else:
+            define_prim(robot_prim_path, "Xform")
+        robot = RobotPrim(robot_prim_path)
+        _add_camera_fill_light(robot_prim_path, float(args.camera_height_m))
 
         camera_prim_path = f"{robot_prim_path}/OracleRgbdCamera"
         camera = Camera(
@@ -244,50 +544,39 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
             orientation=euler_angles_to_quat(np.array([0.0, 0.0, 0.0])),
             resolution=(int(args.camera_width), int(args.camera_height)),
         )
-        camera.initialize()
-        if hasattr(camera, "add_distance_to_camera_to_frame"):
-            camera.add_distance_to_camera_to_frame()
-        if hasattr(camera, "add_distance_to_image_plane_to_frame"):
-            camera.add_distance_to_image_plane_to_frame()
+        try:
+            camera.initialize(attach_rgb_annotator=False)
+        except TypeError:
+            camera.initialize()
+        render_product_path = camera.get_render_product_path()
+        rep_annotators = _create_replicator_annotators(render_product_path)
+        for _ in range(5):
+            world.step(render=False)
+            world.render()
 
         manifest_rows: list[dict[str, Any]] = []
         intrinsics = _intrinsics_from_camera(camera, args.camera_width, args.camera_height)
         for local_idx, row in enumerate(rows):
             x, y, yaw = [float(v) for v in row["base_pose_world"]]
             quat_wxyz = euler_angles_to_quat(np.array([0.0, 0.0, yaw]))
-            robot.set_world_pose(position=np.array([x, y, 0.0]), orientation=quat_wxyz)
-            world.step(render=True)
-            frame = camera.get_current_frame()
-
-            rgb = frame.get("rgba")
-            if rgb is None and hasattr(camera, "get_rgba"):
-                rgb = camera.get_rgba()
-            if rgb is None:
-                raise RuntimeError("Camera did not return an RGB/RGBA frame.")
-            rgb_arr = np.asarray(rgb)
-            if rgb_arr.shape[-1] == 4:
-                rgb_arr = rgb_arr[..., :3]
+            _set_robot_pose(robot, np.array([x, y, 0.0]), quat_wxyz)
+            world.step(render=False)
+            rgb, depth, distance = _extract_replicator_frame(rep_annotators, world)
+            rgb_arr = _normalize_rgb_frame(rgb, args.camera_width, args.camera_height)
             rgb_rel = f"sensors/rgb/{local_idx:06d}.png"
-            Image.fromarray(rgb_arr.astype(np.uint8)).save(paths["root"] / rgb_rel)
+            Image.fromarray(rgb_arr).save(paths["root"] / rgb_rel)
 
-            depth = frame.get("distance_to_image_plane")
-            if depth is None:
-                depth = frame.get("depth")
-            distance = frame.get("distance_to_camera")
-            if distance is None:
-                raise RuntimeError(
-                    "Camera did not return distance_to_camera. "
-                    "Ensure the distance-to-camera annotator is enabled in Isaac Sim."
-                )
-            if depth is None:
-                raise RuntimeError(
-                    "Camera did not return depth/distance_to_image_plane. "
-                    "Ensure the depth annotator is enabled in Isaac Sim."
-                )
+            depth_arr = _normalize_depth_frame(depth, args.camera_width, args.camera_height, "depth")
+            distance_arr = _normalize_depth_frame(
+                distance,
+                args.camera_width,
+                args.camera_height,
+                "distance_to_camera",
+            )
             depth_rel = f"sensors/depth/{local_idx:06d}.npy"
             distance_rel = f"sensors/distance_to_camera/{local_idx:06d}.npy"
-            np.save(paths["root"] / depth_rel, np.asarray(depth, dtype=np.float32))
-            np.save(paths["root"] / distance_rel, np.asarray(distance, dtype=np.float32))
+            np.save(paths["root"] / depth_rel, depth_arr)
+            np.save(paths["root"] / distance_rel, distance_arr)
 
             cam_pos, cam_quat = camera.get_world_pose()
             manifest_rows.append(
@@ -325,12 +614,27 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
             "frame_count": len(manifest_rows),
             "robot": args.robot,
             "robot_asset": robot_asset,
+            "robot_asset_source": robot_asset_source,
+            "robot_warning": robot_warning,
             "scene_id": args.scene_id,
+            "scene_loaded": True,
             "scene_usd": scene_path.as_posix(),
             "trajectory": trajectory_path.as_posix(),
         }
         write_json(paths["metadata"], metadata)
         return metadata
+    except Exception as exc:
+        write_json(
+            paths["debug"] / "isaac_collection_error.json",
+            {
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+                "scene_usd": scene_path.as_posix(),
+                "traceback": traceback.format_exc(),
+                "trajectory": trajectory_path.as_posix(),
+            },
+        )
+        raise
     finally:
         simulation_app.close()
 

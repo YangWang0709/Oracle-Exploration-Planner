@@ -1,5 +1,16 @@
 # Seed 16 Oracle Results
 
+## Current Result
+
+Current seed_16 oracle result is the Blender geometry backend plus a 10-frame Isaac RGB-D replay smoke test.
+
+- Geometry backend: `blender_geometry`
+- `fallback_used`: `false`
+- Trajectory used for Isaac replay: `outputs/exploration_dataset/seed_16_test/trajectory_blender/dense_trajectory.jsonl`
+- Scene used for Isaac replay: `../infinigen/outputs/production_9950x3d_isaac_queue_seed1_40/seed_16/usd/export_scene.blend/export_scene.usdc`
+- Isaac smoke test date: `2026-06-24`
+- Isaac smoke test status: passed
+
 ## Inputs
 
 - Scene root: `../infinigen/outputs/production_9950x3d_isaac_queue_seed1_40/seed_16`
@@ -83,9 +94,70 @@ Results:
 - Debug path: `outputs/exploration_dataset/seed_16_test/trajectory_blender/debug_topdown_path.png`
 - Debug coverage progress: `outputs/exploration_dataset/seed_16_test/trajectory_blender/debug_coverage_progress.png`
 
-## Legacy Fallback Result
+## Isaac RGB-D Smoke Test
 
-The earlier `outputs/exploration_dataset/seed_16_test/oracle_map` result used `fallback_used=true`. It only exercised planner plumbing and is not a real seed_16 geometry result. Do not use its coverage numbers as seed_16 oracle performance.
+Traditional Isaac Sim `python.sh` was not present at the checked locations. The smoke test used the Isaac Sim 5.1 pip / IsaacLab environment:
+
+`/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python`
+
+Command run:
+
+```bash
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/replay_path_collect_rgbd_isaac.py \
+  --scene-usd "../infinigen/outputs/production_9950x3d_isaac_queue_seed1_40/seed_16/usd/export_scene.blend/export_scene.usdc" \
+  --trajectory "outputs/exploration_dataset/seed_16_test/trajectory_blender/dense_trajectory.jsonl" \
+  --out "outputs/exploration_dataset/seed_16_test" \
+  --robot auto \
+  --camera-width 640 \
+  --camera-height 480 \
+  --camera-height-m 1.25 \
+  --headless \
+  --max-frames 10
+```
+
+Run result:
+
+- Scene loaded: `true`
+- Blender trajectory replayed: `true`
+- Manifest rows: `10`
+- RGB frames: `10`
+- Depth `.npy` frames: `10`
+- `distance_to_camera` `.npy` frames: `10`
+- Camera intrinsics: `width=640`, `height=480`, `fx=1527.081787109375`, `fy=1527.0819091796875`, `cx=320.0`, `cy=240.0`
+- Camera pose changes across frames: `true`
+- Camera quaternion norm min/mean/max: `1.0 / 1.0 / 1.0`
+- RGB black-frame ratio: `0.0`
+- Depth finite ratio min/mean/max: `0.961474609375 / 0.9668782552083334 / 1.0`
+- Depth min/mean/max: `1.499999761581421 / 5.323676293851458 / 7.621838569641113`
+- QA status: passed
+- QA script: `scripts/qa_sensor_smoke_test.py`
+- QA report: `outputs/exploration_dataset/seed_16_test/debug/sensor_smoke_qa.json`
+- RGB contact sheet: `outputs/exploration_dataset/seed_16_test/debug/rgb_contact_sheet.png`
+
+Robot asset status:
+
+- `--robot auto` did not find a Nova Carter, Carter, or TurtleBot USD asset in the local Isaac install or Isaac asset root.
+- `robot_asset_source`: `xform_fallback`
+- `robot_asset`: empty
+- The resulting frames are valid only as a camera replay smoke test. They must not be treated as final robot-specific data.
+
+Rendering note:
+
+- The scene loaded successfully, but default RGB lighting was effectively black in headless replay.
+- The replay script adds transient runtime-only lights under `/World` and the replay robot root to validate the RGB pipeline. The source USDC is not modified.
+- Because of that runtime fill light, these smoke-test RGB frames are not final photometric training data.
+
+QA command:
+
+```bash
+python scripts/qa_sensor_smoke_test.py \
+  --dataset "outputs/exploration_dataset/seed_16_test" \
+  --expected-frames 10
+```
+
+## Archived Fallback v0
+
+The earlier `outputs/exploration_dataset/seed_16_test/oracle_map` result is archived fallback v0 and used `fallback_used=true`. It only exercised planner plumbing and is not a real seed_16 geometry result. Do not use its coverage numbers as seed_16 oracle performance.
 
 ## Isaac Replay Dry Run
 
@@ -113,8 +185,8 @@ Dry-run result:
 
 Isaac Sim smoke test:
 
-- Not run in this normal Python environment.
-- Use Isaac Sim's `python.sh` with `scripts/replay_path_collect_rgbd_isaac.py` and the `trajectory_blender/dense_trajectory.jsonl` path to render and collect RGB-D.
+- Superseded by the 10-frame Isaac RGB-D smoke test above.
+- Continue to use `trajectory_blender/dense_trajectory.jsonl` for seed_16 replay.
 
 Expected RGB-D output paths after real Isaac replay:
 

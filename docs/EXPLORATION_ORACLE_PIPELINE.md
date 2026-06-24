@@ -23,6 +23,8 @@ The current non-Isaac foundation contains:
 
 Isaac Sim replay is implemented in `scripts/replay_path_collect_rgbd_isaac.py`. The script supports `--dry-run` with normal Python and imports Isaac Sim packages only when real rendering/collection is requested.
 
+Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
+
 ## Default Planner Parameters
 
 - `map_resolution = 0.05`
@@ -121,6 +123,25 @@ Isaac Sim smoke-test template:
   --max-frames 10
 ```
 
+On the current machine, the usual Isaac Sim `python.sh` paths were absent. The working Isaac Sim 5.1 pip / IsaacLab interpreter is:
+
+`/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python`
+
+Equivalent command used for the seed_16 smoke test:
+
+```bash
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/replay_path_collect_rgbd_isaac.py \
+  --scene-usd "../infinigen/outputs/production_9950x3d_isaac_queue_seed1_40/seed_16/usd/export_scene.blend/export_scene.usdc" \
+  --trajectory "outputs/exploration_dataset/seed_16_test/trajectory_blender/dense_trajectory.jsonl" \
+  --out "outputs/exploration_dataset/seed_16_test" \
+  --robot auto \
+  --camera-width 640 \
+  --camera-height 480 \
+  --camera-height-m 1.25 \
+  --headless \
+  --max-frames 10
+```
+
 Expected collection outputs:
 
 - `sensors/rgb/`
@@ -130,6 +151,24 @@ Expected collection outputs:
 - `metadata.json`
 - `debug/`
 
-If `--robot auto` cannot resolve a Nova Carter, Carter, or TurtleBot asset from the Isaac assets root, pass `--robot-usd` explicitly.
+If `--robot auto` cannot resolve a Nova Carter, Carter, or TurtleBot asset from the Isaac assets root, pass `--robot-usd` explicitly. If no robot asset is available, the script can fall back to a minimal Xform camera rig and writes `robot_asset_source=xform_fallback` plus a warning in `metadata.json`. That fallback is only valid for camera replay smoke testing and must not be treated as final robot-specific data.
+
+Smoke-test QA:
+
+```bash
+python scripts/qa_sensor_smoke_test.py \
+  --dataset "outputs/exploration_dataset/seed_16_test" \
+  --expected-frames 10
+```
+
+The QA script reports:
+
+- Manifest, RGB, depth, and `distance_to_camera` counts.
+- RGB black-frame ratio.
+- Depth finite ratio and value ranges.
+- Camera intrinsics completeness.
+- Camera pose changes across replay frames.
+- Quaternion norm min/mean/max.
+- Pass/fail and a contact sheet under `debug/`.
 
 Isaac Core `camera.get_world_pose()` is treated as returning quaternion orientation in `wxyz` order, which is saved directly in `frame_manifest.jsonl`. If a specific Isaac version returns `xyzw`, pass `--camera-quaternion-convention xyzw` to convert manifest output to `wxyz`. Missing depth or distance annotator output is now a hard error rather than silently saving invalid `.npy` files.
