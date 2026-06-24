@@ -72,3 +72,39 @@ Results:
 - Exact oracle mapping needs a geometry route, preferably PXR/USD traversal or Blender/Infinigen mesh extraction, to rasterize floors, walls, and large objects.
 - The planner and QA are functional on the fallback map and can be reused unchanged once the map backend becomes exact.
 
+## Isaac Replay Dry Run
+
+Command:
+
+```bash
+python scripts/replay_path_collect_rgbd_isaac.py \
+  --scene-usd auto \
+  --usd-dir "../infinigen/outputs/production_9950x3d_isaac_queue_seed1_40/seed_16/usd" \
+  --trajectory "outputs/exploration_dataset/seed_16_test/trajectory/dense_trajectory.jsonl" \
+  --out "outputs/exploration_dataset/seed_16_test" \
+  --robot auto \
+  --dry-run \
+  --max-frames 10
+```
+
+Dry-run result:
+
+- Status: passed
+- Scene resolved to: `../infinigen/outputs/production_9950x3d_isaac_queue_seed1_40/seed_16/usd/export_scene.blend/export_scene.usdc`
+- Trajectory checked: `outputs/exploration_dataset/seed_16_test/trajectory/dense_trajectory.jsonl`
+- Frames checked: `10`
+- Output root checked: `outputs/exploration_dataset/seed_16_test`
+- Dry-run report: `outputs/exploration_dataset/seed_16_test/debug/dry_run_report.json`
+
+Isaac Sim smoke test:
+
+- Not run in this normal Python environment.
+- Use Isaac Sim's `python.sh` with `scripts/replay_path_collect_rgbd_isaac.py` to render and collect RGB-D.
+
+Expected RGB-D output paths after real Isaac replay:
+
+- `outputs/exploration_dataset/seed_16_test/sensors/rgb/`
+- `outputs/exploration_dataset/seed_16_test/sensors/depth/`
+- `outputs/exploration_dataset/seed_16_test/sensors/distance_to_camera/`
+- `outputs/exploration_dataset/seed_16_test/frame_manifest.jsonl`
+- `outputs/exploration_dataset/seed_16_test/metadata.json`

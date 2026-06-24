@@ -20,7 +20,7 @@ The current non-Isaac foundation contains:
 - Trajectory records with `base_pose_world`, `velocity_cmd`, `discrete_action`, `next_waypoint`, and coverage progress fields.
 - QA checks for nonempty map layers, reachable cells, path validity, trajectory presence, coverage threshold, and debug image existence.
 
-Isaac Sim replay is not implemented in this stage. Stage 4 adds a dry-run-safe replay script that only imports Isaac packages inside the actual Isaac environment.
+Isaac Sim replay is implemented in `scripts/replay_path_collect_rgbd_isaac.py`. The script supports `--dry-run` with normal Python and imports Isaac Sim packages only when real rendering/collection is requested.
 
 ## Default Planner Parameters
 
@@ -66,3 +66,43 @@ Trajectory artifacts:
 
 Generated map, path, image, and dataset artifacts remain under `outputs/` and are not committed. Durable result summaries should be written into docs.
 
+## Isaac Replay
+
+Dry-run command:
+
+```bash
+python scripts/replay_path_collect_rgbd_isaac.py \
+  --scene-usd auto \
+  --usd-dir "../infinigen/outputs/production_9950x3d_isaac_queue_seed1_40/seed_16/usd" \
+  --trajectory "outputs/exploration_dataset/seed_16_test/trajectory/dense_trajectory.jsonl" \
+  --out "outputs/exploration_dataset/seed_16_test" \
+  --robot auto \
+  --dry-run \
+  --max-frames 10
+```
+
+Isaac Sim smoke-test template:
+
+```bash
+"/path/to/isaacsim/python.sh" scripts/replay_path_collect_rgbd_isaac.py \
+  --scene-usd "../infinigen/outputs/production_9950x3d_isaac_queue_seed1_40/seed_16/usd/export_scene.blend/export_scene.usdc" \
+  --trajectory "outputs/exploration_dataset/seed_16_test/trajectory/dense_trajectory.jsonl" \
+  --out "outputs/exploration_dataset/seed_16_test" \
+  --robot auto \
+  --camera-width 640 \
+  --camera-height 480 \
+  --camera-height-m 1.25 \
+  --headless \
+  --max-frames 10
+```
+
+Expected collection outputs:
+
+- `sensors/rgb/`
+- `sensors/depth/`
+- `sensors/distance_to_camera/`
+- `frame_manifest.jsonl`
+- `metadata.json`
+- `debug/`
+
+If `--robot auto` cannot resolve a Nova Carter, Carter, or TurtleBot asset from the Isaac assets root, pass `--robot-usd` explicitly.
