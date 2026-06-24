@@ -2,6 +2,7 @@
 
 __all__ = [
     "grid",
+    "debug_viz",
     "io_utils",
     "mapping",
     "metadata_parser",
@@ -9,4 +10,3 @@ __all__ = [
     "qa",
     "trajectory",
 ]
-

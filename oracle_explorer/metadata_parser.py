@@ -77,3 +77,56 @@ def summarize_solve_state(path: str | Path) -> dict[str, Any]:
         "total_entries": len(objs),
     }
 
+
+def choose_solve_state(files: SceneFiles) -> Path | None:
+    if not files.solve_state_files:
+        return None
+    coarse = [p for p in files.solve_state_files if p.parent.name == "coarse"]
+    return coarse[0] if coarse else files.solve_state_files[0]
+
+
+def choose_usd(files: SceneFiles) -> Path | None:
+    if not files.usd_files:
+        return None
+    preferred_names = ("scene.usdc", "scene.usd", "export_scene.usdc", "export_scene.usd")
+    for name in preferred_names:
+        for path in files.usd_files:
+            if path.name == name:
+                return path
+    return files.usd_files[0]
+
+
+def extract_room_graph(path: str | Path) -> dict[str, Any]:
+    data = read_json(path)
+    rooms: dict[str, dict[str, Any]] = {}
+    objects_by_room: dict[str, list[str]] = {}
+    for name, item in data.get("objs", {}).items():
+        tags = list(item.get("tags", []))
+        is_room = "Semantics(room)" in tags
+        if is_room:
+            neighbors = []
+            for relation in item.get("relations", []):
+                rel = relation.get("relation", {})
+                if rel.get("relation_type") == "RoomNeighbour":
+                    neighbors.append(
+                        {
+                            "connector_types": rel.get("connector_types", []),
+                            "target_name": relation.get("target_name"),
+                        }
+                    )
+            rooms[name] = {
+                "neighbors": neighbors,
+                "obj": item.get("obj"),
+                "tags": tags,
+            }
+        else:
+            for relation in item.get("relations", []):
+                target = relation.get("target_name")
+                if isinstance(target, str) and "/" in target:
+                    objects_by_room.setdefault(target, []).append(name)
+
+    return {
+        "objects_by_room": objects_by_room,
+        "room_count": len(rooms),
+        "rooms": rooms,
+    }
