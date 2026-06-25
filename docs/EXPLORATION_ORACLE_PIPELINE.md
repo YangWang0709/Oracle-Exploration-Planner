@@ -25,7 +25,7 @@ Isaac Sim replay is implemented in `scripts/replay_path_collect_rgbd_isaac.py`. 
 
 Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 
-Manual route annotation is implemented with `scripts/render_manual_annotation_geometry_map.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. The Isaac camera top-down renderer is diagnostic only, and the previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
+Manual route annotation is implemented with `scripts/render_manual_annotation_semantic_floorplan.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. The Isaac camera top-down renderer is diagnostic only, and the previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
 
 The current photometric validation scene is seed 201, documented in
 `docs/SEED_201_USD_SOURCE_OF_TRUTH.md` and `docs/SEED_201_ADJUSTED_RESULTS.md`.
@@ -160,14 +160,16 @@ Trajectory artifacts:
 
 Manual annotation artifacts:
 
-- `manual_annotation_geometry_v2/full_scene_geometry_clean.png`
-- `manual_annotation_geometry_v2/full_scene_geometry_metadata.json`
-- `manual_annotation_geometry_v2/full_scene_geometry_bounds_debug.json`
-- `manual_annotation_geometry_v2/full_scene_geometry_object_summary.json`
-- `manual_annotation_geometry_v2/full_scene_geometry_with_bounds.png`
-- `manual_annotation_geometry_v2/full_scene_geometry_with_start.png`
-- `manual_annotation_geometry_v2/render_report.json`
-- `manual_annotation_geometry_v2/manual_geometry_base_map_qa.json`
+- `manual_annotation_floorplan_v3/floorplan_clean.png`
+- `manual_annotation_floorplan_v3/floorplan_semantic.png`
+- `manual_annotation_floorplan_v3/floorplan_semantic_labeled.png`
+- `manual_annotation_floorplan_v3/floorplan_with_start.png`
+- `manual_annotation_floorplan_v3/floorplan_with_bounds.png`
+- `manual_annotation_floorplan_v3/floorplan_metadata.json`
+- `manual_annotation_floorplan_v3/floorplan_object_summary.json`
+- `manual_annotation_floorplan_v3/floorplan_unknown_objects.json`
+- `manual_annotation_floorplan_v3/floorplan.svg`
+- `manual_annotation_floorplan_v3/semantic_floorplan_qa.json`
 - `manual_route/manual_waypoints_image.json`
 - `manual_route/manual_waypoints_world.json`
 - `manual_route/manual_route_preview.png`
@@ -308,30 +310,32 @@ This seed 201 pilot used no runtime fill light and wrote `photometric_valid_for_
 
 ## Manual Route Annotation
 
-Use the same adjusted USD-derived map to render a clean USD geometry footprint base image:
+Use the same adjusted USD-derived map to render a clean semantic floorplan base image:
 
-The Isaac camera top-down render can still be unreliable or appear identical to stale old output, so it is diagnostic only. The manual annotation entry point is a floorplan-like footprint image generated directly from imported adjusted USD mesh geometry. It does not use an Isaac camera, Replicator render product, or viewport screenshot.
+The Isaac camera top-down render can still be unreliable or appear identical to stale old output, so it is diagnostic only. The previous plain footprint map shows the structure but not enough furniture semantics. The manual annotation entry point is now a semantic floorplan generated directly from imported adjusted USD mesh geometry. It does not use an Isaac camera, Replicator render product, or viewport screenshot.
 
 ```bash
-/home/ubuntu22/infinigen/blender/blender -b --python scripts/render_manual_annotation_geometry_map.py -- \
+/home/ubuntu22/infinigen/blender/blender -b --python scripts/render_manual_annotation_semantic_floorplan.py -- \
   --scene-id "seed_201_adjusted_usd_test" \
   --scene-usd "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
-  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2" \
-  --render-width 3000 \
-  --render-height 3000 \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3" \
+  --render-width 5000 \
+  --render-height 5000 \
   --margin-m 2.0 \
-  --random-seed 0
+  --random-seed 0 \
+  --draw-labels \
+  --draw-legend
 ```
 
-Open `manual_annotation_geometry_v2/full_scene_geometry_clean.png` for annotation. Use `manual_annotation_geometry_v2/full_scene_geometry_with_bounds.png` to inspect USD/map/final bounds, and `manual_annotation_geometry_v2/full_scene_geometry_with_start.png` to view the random start marker. Do not use `topdown_base.png` or `manual_annotation/full_scene_topdown_clean.png` as the recommended entry point.
+Open `manual_annotation_floorplan_v3/floorplan_clean.png` for annotation. Use `manual_annotation_floorplan_v3/floorplan_semantic_labeled.png` to inspect furniture labels, `manual_annotation_floorplan_v3/floorplan_with_bounds.png` to inspect bounds, and `manual_annotation_floorplan_v3/floorplan_with_start.png` to view the random start marker. Do not use `topdown_base.png`, `manual_annotation/full_scene_topdown_clean.png`, or `manual_annotation_geometry_v2/full_scene_geometry_clean.png` as the recommended entry point.
 
 Then let the user click route waypoints:
 
 ```bash
 python scripts/manual_route_annotator.py \
-  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_clean.png" \
-  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_metadata.json" \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_metadata.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
 ```

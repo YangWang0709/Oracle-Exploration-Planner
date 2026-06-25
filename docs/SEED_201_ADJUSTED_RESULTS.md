@@ -48,31 +48,36 @@ The old automatic top-down path overlay has been deprecated because it was too c
 
 The replacement flow is:
 
-- Render a clean USD geometry footprint base image directly from adjusted USD mesh geometry.
+- Render a clean semantic floorplan directly from adjusted USD mesh geometry.
 - Randomly initialize a legal start pose from the adjusted USD-derived reachable/traversable map.
 - Let the user click route waypoints manually.
 - Convert the clicked points to adjusted USD world coordinates.
 - Use A* only to connect adjacent manual waypoints.
 - Replay `manual_trajectory/manual_dense_trajectory.jsonl` after manual route QA passes.
 
-The previous Isaac camera top-down base image can still be unreliable or look like stale old output, even when USD bounds metadata is correct. The current manual annotation base map therefore does not use Isaac camera rendering. It imports the adjusted USD in Blender and draws a floorplan-like mesh footprint image from geometry. `coarse/scene.blend` is not used.
+The previous Isaac camera top-down base image can still be unreliable or look like stale old output, even when USD bounds metadata is correct. The plain geometry footprint map makes room structure visible but does not make furniture and objects clear enough. The current manual annotation base map therefore imports the adjusted USD in Blender and draws a semantic floorplan with walls, room structure, furniture, and major objects. `coarse/scene.blend` is not used.
 
 Manual annotation outputs:
 
-- Base image directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2`
-- Clean base image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_clean.png`
-- Metadata: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_metadata.json`
-- Bounds debug: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_bounds_debug.json`
-- Object summary: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_object_summary.json`
-- Bounds QA image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_with_bounds.png`
-- Optional start reference image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_with_start.png`
+- Base image directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3`
+- Clean base image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_clean.png`
+- Semantic image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_semantic.png`
+- Labeled semantic image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_semantic_labeled.png`
+- Metadata: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_metadata.json`
+- Object summary: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_object_summary.json`
+- Unknown object report: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_unknown_objects.json`
+- Bounds QA image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_with_bounds.png`
+- Optional start reference image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_with_start.png`
+- SVG: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan.svg`
 - Manual route directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route`
 - Manual trajectory directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory`
 - Start pose: random by default, reproducible with `--random-seed`
 - Source of truth: `usd`
 - Used blend: `false`
 
-Open `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_clean.png` for annotation. Use `full_scene_geometry_with_bounds.png` to inspect USD/map/final bounds, and `full_scene_geometry_with_start.png` for the random start marker. Do not use `topdown_base.png` or `manual_annotation/full_scene_topdown_clean.png` as the recommended manual annotation entry point.
+Open `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_clean.png` for annotation. Use `floorplan_semantic_labeled.png` to inspect furniture labels, `floorplan_with_bounds.png` to inspect USD/map/final bounds, and `floorplan_with_start.png` for the random start marker. Do not use `topdown_base.png`, `manual_annotation/full_scene_topdown_clean.png`, or `manual_annotation_geometry_v2/full_scene_geometry_clean.png` as the recommended manual annotation entry point.
+
+Current semantic class counts include: bed `8`, cabinet `37`, chair `3`, desk `12`, floor `9`, fridge `4`, plant `12`, rug `5`, shelf `93`, sofa `1`, table `1`, wall `10`, window `19`. Unknown object ratio is approximately `0.021`, so the semantic floorplan QA passes without warnings.
 
 The automatic `trajectory_usd_blender` route remains available as a reference route, but the user-approved route must come from manual annotation. Once the user saves waypoints, RGB-D replay must use `manual_trajectory/manual_dense_trajectory.jsonl`; datasets whose metadata is not `route_source=manual` should not be treated as user-annotated route data.
 
