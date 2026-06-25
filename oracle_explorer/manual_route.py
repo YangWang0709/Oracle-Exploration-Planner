@@ -229,13 +229,16 @@ def save_manual_route_annotation(
     preview_manual_route(base_image, full_image_rows, paths["manual_route_preview"])
     route_metadata = {
         "base_image": Path(base_image).as_posix(),
+        "base_map_type": metadata.get("base_map_type"),
         "coordinate_convention": metadata.get("coordinate_convention", COORDINATE_CONVENTION),
         "map_dir": Path(map_dir).as_posix(),
+        "metadata_path": Path(metadata_path).as_posix(),
         "notes": [
             "Manual route starts from the recorded start pose; user clicks append route waypoints.",
             "No automatic route overlay, direction indicators, or coverage planner route was used for annotation.",
         ],
         "random_seed": seed,
+        "render_backend": metadata.get("render_backend"),
         "scene_usd": metadata.get("scene_usd"),
         "source_of_truth": metadata.get("source_of_truth"),
         "start_pose_source": start_source,

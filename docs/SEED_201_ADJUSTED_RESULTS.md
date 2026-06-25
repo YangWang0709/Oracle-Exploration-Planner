@@ -48,30 +48,31 @@ The old automatic top-down path overlay has been deprecated because it was too c
 
 The replacement flow is:
 
-- Render a clean top-down base image from adjusted USD visible geometry world bounds.
+- Render a clean USD geometry footprint base image directly from adjusted USD mesh geometry.
 - Randomly initialize a legal start pose from the adjusted USD-derived reachable/traversable map.
 - Let the user click route waypoints manually.
 - Convert the clicked points to adjusted USD world coordinates.
 - Use A* only to connect adjacent manual waypoints.
 - Replay `manual_trajectory/manual_dense_trajectory.jsonl` after manual route QA passes.
 
-The previous incomplete base-map issue came from using oracle map bounds as the top-down camera bounds. The current renderer uses the adjusted USD stage and `UsdGeom.BBoxCache` for full-scene visible geometry bounds; `coarse/scene.blend` is not used. `map_world_bounds()` is retained only as a comparison/fallback path, and fallback does not pass QA by default.
+The previous Isaac camera top-down base image can still be unreliable or look like stale old output, even when USD bounds metadata is correct. The current manual annotation base map therefore does not use Isaac camera rendering. It imports the adjusted USD in Blender and draws a floorplan-like mesh footprint image from geometry. `coarse/scene.blend` is not used.
 
 Manual annotation outputs:
 
-- Base image directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation`
-- Clean base image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png`
-- Metadata: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_metadata.json`
-- Bounds debug: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_bounds_debug.json`
-- Bounds-frame QA image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_with_bounds_frame.png`
-- Optional start reference image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_with_start.png`
+- Base image directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2`
+- Clean base image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_clean.png`
+- Metadata: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_metadata.json`
+- Bounds debug: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_bounds_debug.json`
+- Object summary: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_object_summary.json`
+- Bounds QA image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_with_bounds.png`
+- Optional start reference image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_with_start.png`
 - Manual route directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route`
 - Manual trajectory directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory`
 - Start pose: random by default, reproducible with `--random-seed`
 - Source of truth: `usd`
 - Used blend: `false`
 
-Open `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png` for annotation. Use `full_scene_topdown_with_bounds_frame.png` to inspect crop/bounds issues. Do not use `topdown_base.png` as the recommended manual annotation entry point.
+Open `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_clean.png` for annotation. Use `full_scene_geometry_with_bounds.png` to inspect USD/map/final bounds, and `full_scene_geometry_with_start.png` for the random start marker. Do not use `topdown_base.png` or `manual_annotation/full_scene_topdown_clean.png` as the recommended manual annotation entry point.
 
 The automatic `trajectory_usd_blender` route remains available as a reference route, but the user-approved route must come from manual annotation. Once the user saves waypoints, RGB-D replay must use `manual_trajectory/manual_dense_trajectory.jsonl`; datasets whose metadata is not `route_source=manual` should not be treated as user-annotated route data.
 

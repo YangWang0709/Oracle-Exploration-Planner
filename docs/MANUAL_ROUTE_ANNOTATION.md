@@ -13,13 +13,13 @@ The automatic `trajectory_usd_blender` output can still be used as a reference t
 - `source_of_truth`: `usd`
 - `used_blend`: `false`
 
-The clean top-down render, manual annotation, manual trajectory builder, and replay should all use this same adjusted USD-derived map. Do not use `coarse/scene.blend` for seed 201 manual routes.
+The geometry footprint base map, manual annotation, manual trajectory builder, and replay should all use this same adjusted USD-derived map. Do not use `coarse/scene.blend` for seed 201 manual routes.
 
-Earlier manual base renders could be incomplete because the camera bounds were derived from the oracle map bounds rather than from the adjusted USD scene bounds. The current renderer computes visible geometry world bounds from the adjusted USD stage with `UsdGeom.BBoxCache`, then fits an orthographic camera around those bounds. `map_world_bounds()` is now only a fallback/comparison path; if metadata says `bounds_source=map_meta_fallback`, the base map QA fails by default.
+The Isaac/Replicator top-down camera render can still be misleading or look like a stale old output, even when USD bounds metadata is correct. For manual route annotation, the recommended base map is now a USD geometry footprint floorplan generated directly from imported adjusted USD mesh geometry. It does not depend on an Isaac camera, viewport, render product, or orthographic camera behavior.
 
 ## Workflow
 
-1. Render a clean full-scene top-down base image from the adjusted USD.
+1. Render a clean full-scene USD geometry footprint base image from the adjusted USD.
 2. Randomly initialize a legal robot start pose from the reachable/traversable map.
 3. User manually clicks route waypoints on the base image.
 4. Convert clicked image coordinates to adjusted USD world coordinates.
@@ -31,54 +31,51 @@ The default start pose is random but reproducible with `--random-seed`. It is sa
 
 ## Seed 201 Commands
 
-Render the base image:
+Render the geometry footprint base image:
 
 ```bash
-/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/render_manual_annotation_base_topdown_isaac.py \
+/home/ubuntu22/infinigen/blender/blender -b --python scripts/render_manual_annotation_geometry_map.py -- \
   --scene-id "seed_201_adjusted_usd_test" \
   --scene-usd "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
-  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation" \
-  --headless \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2" \
   --render-width 3000 \
   --render-height 3000 \
-  --full-scene \
   --margin-m 2.0 \
-  --random-seed 0 \
-  --random-start \
-  --strict-orthographic
+  --random-seed 0
 ```
 
 Outputs:
 
-- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png`
-- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_metadata.json`
-- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_bounds_debug.json`
-- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_with_bounds_frame.png`
-- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_with_start.png`
-- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_render_report.json`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_clean.png`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_metadata.json`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_bounds_debug.json`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_object_summary.json`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_with_bounds.png`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_with_start.png`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/render_report.json`
 
 The clean PNG is the annotation entry point and contains no route, no direction indicators, no waypoint overlay, and no start marker. Open it with:
 
 ```bash
-xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png"
+xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_clean.png"
 ```
 
-Do not use `topdown_base.png` as the recommended annotation entry point. To inspect whether the scene was cropped, open `full_scene_topdown_with_bounds_frame.png`; it draws the final image bounds and the oracle map bounds for comparison. The optional start overlay is a separate reference image.
+Do not use `topdown_base.png` or `manual_annotation/full_scene_topdown_clean.png` as the recommended annotation entry point. To inspect bounds, open `full_scene_geometry_with_bounds.png`; it draws final image bounds, raw USD mesh bounds, map bounds, and corner world coordinates. For random-start reference, open `full_scene_geometry_with_start.png`.
 
 Base map QA:
 
 ```bash
-python scripts/qa_manual_base_map.py \
-  --manual-annotation-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation"
+python scripts/qa_manual_geometry_base_map.py \
+  --manual-annotation-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2"
 ```
 
 Run the annotator:
 
 ```bash
 python scripts/manual_route_annotator.py \
-  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png" \
-  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_metadata.json" \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_metadata.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
 ```
@@ -98,8 +95,8 @@ You can also override the start from the command line:
 
 ```bash
 python scripts/manual_route_annotator.py \
-  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png" \
-  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_metadata.json" \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_metadata.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
   --start 1.0 2.0 0.0
@@ -171,17 +168,19 @@ python scripts/qa_manual_route_replay.py \
 
 ## Start Pose
 
-`full_scene_topdown_metadata.json` records:
+`full_scene_geometry_metadata.json` records:
 
 - `random_start_enabled`
 - `random_seed`
 - `start_pose_world`
 - `start_pose_source`
 - `min_start_clearance_m`
-- `bounds_source=usd_stage_visible_geometry_bounds`
+- `base_map_type=usd_geometry_footprint`
+- `render_backend=blender_usd_geometry_2d`
+- `bounds_source=imported_usd_mesh_geometry_bounds`
 - `raw_usd_world_bounds`
 - `final_world_bounds_xy`
-- `included_prim_count`
+- `full_scene_geometry_object_summary.json`
 
 The annotator uses this start as waypoint `0`. User clicks become waypoint `1`, `2`, and so on. The saved world waypoint file separates `start_pose_world`, `user_waypoints`, and `full_waypoints`.
 

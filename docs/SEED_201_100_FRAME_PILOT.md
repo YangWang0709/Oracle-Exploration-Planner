@@ -28,11 +28,12 @@ The automatic `trajectory_usd_blender` result remains available as a reference p
 
 ## Manual Annotation Entry Point
 
-- Base image directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation`
-- Clean full-scene base image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png`
-- Metadata: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_metadata.json`
-- Optional start reference image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_with_start.png`
-- Base QA: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/manual_base_map_qa.json`
+- Base image directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2`
+- Clean geometry footprint base image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_clean.png`
+- Metadata: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_metadata.json`
+- Optional start reference image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_with_start.png`
+- Bounds QA image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/full_scene_geometry_with_bounds.png`
+- Base QA: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_geometry_v2/manual_geometry_base_map_qa.json`
 - Default start: random legal reachable/traversable pose
 - Reproducibility: `--random-seed`
 - Manual route output: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route`
@@ -72,4 +73,4 @@ The run used `--fail-on-black-rgb` and `--min-rgb-mean-brightness 5.0`. No runti
 
 ## Recommendation
 
-Open `full_scene_topdown_clean.png`, accept or override the metadata random start pose, and manually click the route waypoints. After `qa_manual_route.py` passes, use only `manual_trajectory/manual_dense_trajectory.jsonl` for RGB-D replay. The automatic coverage trajectory remains reference-only and must not be used for user-annotated route sampling. Robot-specific training should still wait for a real robot USD, or for the replay to be rerun with an explicit robot asset.
+Open `manual_annotation_geometry_v2/full_scene_geometry_clean.png`, accept or override the metadata random start pose, and manually click the route waypoints. The Isaac camera top-down render is diagnostic only; do not use `topdown_base.png` or `manual_annotation/full_scene_topdown_clean.png` as the main annotation entry point. After `qa_manual_route.py` passes, use only `manual_trajectory/manual_dense_trajectory.jsonl` for RGB-D replay. The automatic coverage trajectory remains reference-only and must not be used for user-annotated route sampling. Robot-specific training should still wait for a real robot USD, or for the replay to be rerun with an explicit robot asset.

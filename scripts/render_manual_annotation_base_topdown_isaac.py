@@ -1,5 +1,8 @@
 #!/usr/bin/env python
-"""Render a clean top-down base image for manual route annotation."""
+"""Render a diagnostic Isaac top-down image.
+
+For manual route annotation, prefer scripts/render_manual_annotation_geometry_map.py.
+"""
 
 from __future__ import annotations
 
@@ -40,7 +43,12 @@ from replay_path_collect_rgbd_isaac import (
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Render a clean full-scene Isaac top-down image for manual route annotation.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Render a diagnostic full-scene Isaac top-down image. "
+            "For manual annotation, prefer scripts/render_manual_annotation_geometry_map.py."
+        )
+    )
     parser.add_argument("--scene-id", required=True)
     parser.add_argument("--scene-usd", required=True)
     parser.add_argument("--map-dir", required=True)
@@ -622,6 +630,7 @@ def run_render(args: argparse.Namespace) -> dict[str, Any]:
             "meters_per_pixel_y": transforms["meters_per_pixel_y"],
             "min_start_clearance_m": float(args.min_start_clearance_m),
             "notes": [
+                "Diagnostic Isaac camera render only; for manual annotation use scripts/render_manual_annotation_geometry_map.py.",
                 "Clean full-scene top-down base image for manual route annotation.",
                 "The main clean PNG contains no route, no direction indicators, no waypoint overlay, and no start marker.",
                 "Any start marker is written only to the optional overlay PNG; the source USD was not modified or saved.",
@@ -719,6 +728,11 @@ def run_render(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> None:
     args = parse_args()
+    print(
+        "WARNING: This Isaac camera topdown renderer is diagnostic only. "
+        "For manual annotation, prefer geometry map: scripts/render_manual_annotation_geometry_map.py",
+        file=sys.stderr,
+    )
     result = run_render(args)
     print(json.dumps(result, indent=2, sort_keys=True))
 
