@@ -26,8 +26,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-frames", type=int, required=True)
     parser.add_argument("--expected-width", type=int, default=640)
     parser.add_argument("--expected-height", type=int, default=480)
+    parser.add_argument("--min-rgb-mean-brightness", type=float, default=5.0)
     parser.add_argument("--min-depth-finite-ratio", type=float, default=0.01)
     parser.add_argument("--quaternion-norm-tolerance", type=float, default=0.02)
+    parser.add_argument("--require-photometric-valid", action="store_true")
+    parser.add_argument("--require-robot-specific-valid", action="store_true")
     return parser.parse_args()
 
 
@@ -144,23 +147,50 @@ def _check_rgb(
     expected_count: int,
     expected_width: int,
     expected_height: int,
+    min_mean_brightness: float,
     failures: list[str],
 ) -> dict[str, Any]:
     black_frames = 0
+    too_dark_frames = 0
     checked = 0
+    mean_brightness: list[float] = []
     for rgb_file in rgb_files:
         arr = _load_rgb(rgb_file)
         checked += 1
         if arr.shape != (expected_height, expected_width, 3):
             failures.append(f"{rgb_file} has RGB shape {arr.shape}, expected {(expected_height, expected_width, 3)}")
-        if int(np.max(arr)) <= 2 or float(np.mean(arr)) <= 1.0:
+        mean_value = float(np.mean(arr))
+        mean_brightness.append(mean_value)
+        if int(np.max(arr)) <= 2 or mean_value <= 1.0:
             black_frames += 1
+        if mean_value < min_mean_brightness:
+            too_dark_frames += 1
     if len(rgb_files) != expected_count:
         failures.append(f"RGB file count {len(rgb_files)} != expected {expected_count}")
     ratio = black_frames / checked if checked else 1.0
+    too_dark_ratio = too_dark_frames / checked if checked else 1.0
     if checked and black_frames:
         failures.append(f"{black_frames} RGB frame(s) look black")
-    return {"black_frame_count": black_frames, "black_frame_ratio": ratio}
+    return {
+        "black_frame_count": black_frames,
+        "black_frame_ratio": ratio,
+        "mean_brightness": _stats(mean_brightness),
+        "too_dark_frame_count": too_dark_frames,
+        "too_dark_ratio": too_dark_ratio,
+    }
+
+
+def _load_metadata(dataset: Path, failures: list[str]) -> dict[str, Any]:
+    metadata_path = dataset / "metadata.json"
+    if not metadata_path.exists():
+        failures.append(f"metadata does not exist: {metadata_path}")
+        return {}
+    with metadata_path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        failures.append(f"metadata is not an object: {metadata_path}")
+        return {}
+    return data
 
 
 def _check_depth_like(
@@ -211,6 +241,7 @@ def run_qa(args: argparse.Namespace) -> dict[str, Any]:
     depth_dir = dataset / "sensors" / "depth"
     distance_dir = dataset / "sensors" / "distance_to_camera"
     failures: list[str] = []
+    metadata = _load_metadata(dataset, failures)
 
     if not manifest_path.exists():
         failures.append(f"manifest does not exist: {manifest_path}")
@@ -226,7 +257,14 @@ def run_qa(args: argparse.Namespace) -> dict[str, Any]:
 
     _check_intrinsics(rows, args.expected_width, args.expected_height, failures)
     pose_summary = _check_camera_pose(rows, args.quaternion_norm_tolerance, failures)
-    rgb_summary = _check_rgb(rgb_files, args.expected_frames, args.expected_width, args.expected_height, failures)
+    rgb_summary = _check_rgb(
+        rgb_files,
+        args.expected_frames,
+        args.expected_width,
+        args.expected_height,
+        args.min_rgb_mean_brightness,
+        failures,
+    )
     depth_summary = _check_depth_like(
         depth_files,
         args.expected_frames,
@@ -250,6 +288,26 @@ def run_qa(args: argparse.Namespace) -> dict[str, Any]:
             f"depth finite ratio min {finite_ratio_min} < required {args.min_depth_finite_ratio}"
         )
 
+    metadata_flags = {
+        "add_camera_fill_light": metadata.get("add_camera_fill_light"),
+        "add_smoke_test_light": metadata.get("add_smoke_test_light"),
+        "photometric_valid_for_training": metadata.get("photometric_valid_for_training"),
+        "replay_scene_usd": metadata.get("replay_scene_usd") or metadata.get("scene_usd"),
+        "robot_specific_valid_for_training": metadata.get("robot_specific_valid_for_training"),
+        "source_of_truth": metadata.get("source_of_truth"),
+        "used_xform_fallback": metadata.get("used_xform_fallback"),
+    }
+    if args.require_photometric_valid and metadata_flags["photometric_valid_for_training"] is not True:
+        failures.append(
+            "metadata photometric_valid_for_training is not true "
+            f"({metadata_flags['photometric_valid_for_training']!r})"
+        )
+    if args.require_robot_specific_valid and metadata_flags["robot_specific_valid_for_training"] is not True:
+        failures.append(
+            "metadata robot_specific_valid_for_training is not true "
+            f"({metadata_flags['robot_specific_valid_for_training']!r})"
+        )
+
     contact_sheet = dataset / "debug" / "rgb_contact_sheet.png"
     _write_contact_sheet(rgb_files[: args.expected_frames], contact_sheet)
 
@@ -269,9 +327,12 @@ def run_qa(args: argparse.Namespace) -> dict[str, Any]:
         "expected_frames": args.expected_frames,
         "failures": failures,
         "manifest_frame_count": len(rows),
+        "metadata_flags": metadata_flags,
         "passed": not failures,
         "rgb_black_frame_ratio": rgb_summary["black_frame_ratio"],
         "rgb_count": len(rgb_files),
+        "rgb_mean_brightness": rgb_summary["mean_brightness"],
+        "rgb_too_dark_ratio": rgb_summary["too_dark_ratio"],
     }
     write_json(dataset / "debug" / "sensor_smoke_qa.json", summary)
     return summary
@@ -285,9 +346,12 @@ def main() -> None:
     print(f"depth count: {summary['depth_count']}")
     print(f"distance_to_camera count: {summary['distance_to_camera_count']}")
     print(f"RGB black-frame ratio: {summary['rgb_black_frame_ratio']}")
+    print(f"RGB mean brightness min/mean/max: {summary['rgb_mean_brightness']}")
+    print(f"RGB too-dark ratio: {summary['rgb_too_dark_ratio']}")
     print(f"depth finite ratio min/mean/max: {summary['depth_finite_ratio']}")
     print(f"depth min/mean/max: {summary['depth_value']}")
     print(f"camera quaternion norm min/mean/max: {summary['camera_quaternion_norm']}")
+    print(f"metadata flags: {summary['metadata_flags']}")
     print(f"pass/fail: {'pass' if summary['passed'] else 'fail'}")
     if summary["failures"]:
         print("failures:")

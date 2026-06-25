@@ -25,6 +25,7 @@ import numpy as np
 from PIL import Image
 
 from oracle_explorer.io_utils import ensure_dir, read_jsonl, write_json, write_jsonl
+from oracle_explorer.scene_usd import resolve_scene_usd as resolve_scene_usd_with_info
 
 
 AUTO_ROBOT_HINTS = [
@@ -64,28 +65,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--scene-id", default="seed_16_test")
+    parser.add_argument("--prefer-latest-usd", action="store_true")
+    parser.add_argument("--add-smoke-test-light", action="store_true")
+    parser.add_argument("--add-camera-fill-light", action="store_true")
+    parser.add_argument("--fail-on-black-rgb", action="store_true")
+    parser.add_argument("--allow-xform-fallback-robot", action="store_true")
+    parser.add_argument("--min-rgb-mean-brightness", type=float, default=5.0)
     return parser.parse_args()
 
 
-def resolve_scene_usd(scene_usd: str, usd_dir: str | None) -> Path:
-    if scene_usd != "auto":
-        path = Path(scene_usd)
-        if not path.exists():
-            raise FileNotFoundError(f"Scene USD does not exist: {path}")
-        return path.resolve()
-    if usd_dir is None:
-        raise ValueError("--usd-dir is required when --scene-usd auto is used")
-    root = Path(usd_dir)
-    if not root.exists():
-        raise FileNotFoundError(f"USD directory does not exist: {root}")
-    candidates = sorted(root.rglob("*.usdc")) + sorted(root.rglob("*.usd"))
-    if not candidates:
-        raise FileNotFoundError(f"No .usd or .usdc files found under {root}")
-    for name in ("scene.usdc", "scene.usd", "export_scene.usdc", "export_scene.usd"):
-        for candidate in candidates:
-            if candidate.name == name:
-                return candidate.resolve()
-    return candidates[0].resolve()
+def resolve_scene_usd(scene_usd: str, usd_dir: str | None, prefer_latest_usd: bool = False) -> Path:
+    path, _ = resolve_scene_usd_with_info(
+        scene_usd,
+        usd_dir,
+        prefer_latest_usd=prefer_latest_usd,
+    )
+    return path
 
 
 def load_trajectory(path: str | Path, max_frames: int | None = None) -> list[dict[str, Any]]:
@@ -112,29 +107,46 @@ def output_paths(out_root: str | Path) -> dict[str, Path]:
 
 
 def run_dry_run(args: argparse.Namespace) -> dict[str, Any]:
-    scene_path = resolve_scene_usd(args.scene_usd, args.usd_dir)
+    scene_path, scene_info = resolve_scene_usd_with_info(
+        args.scene_usd,
+        args.usd_dir,
+        prefer_latest_usd=bool(args.prefer_latest_usd),
+    )
     trajectory_path = Path(args.trajectory).resolve()
     if not trajectory_path.exists():
         raise FileNotFoundError(f"Trajectory file does not exist: {trajectory_path}")
     rows = load_trajectory(trajectory_path, args.max_frames)
     paths = output_paths(Path(args.out).resolve())
     report = {
+        "add_camera_fill_light": bool(args.add_camera_fill_light),
+        "add_smoke_test_light": bool(args.add_smoke_test_light),
+        "allow_xform_fallback_robot": bool(args.allow_xform_fallback_robot),
         "camera": {
             "height": args.camera_height,
             "height_m": args.camera_height_m,
             "width": args.camera_width,
         },
         "dry_run": True,
+        "fail_on_black_rgb": bool(args.fail_on_black_rgb),
         "frame_count_checked": len(rows),
         "headless": bool(args.headless),
+        "min_rgb_mean_brightness": float(args.min_rgb_mean_brightness),
         "out": paths["root"].as_posix(),
+        "prefer_latest_usd": bool(args.prefer_latest_usd),
+        "replay_scene_usd": scene_path.as_posix(),
+        "resolved_scene_usd": scene_path.as_posix(),
         "robot": args.robot,
         "robot_usd": args.robot_usd,
         "scene_id": args.scene_id,
         "scene_usd": scene_path.as_posix(),
+        "selected_by": scene_info["selected_by"],
+        "source_of_truth": "usd",
         "trajectory": trajectory_path.as_posix(),
+        "usd_candidates": scene_info["usd_candidates"],
+        "usd_dir": scene_info["usd_dir"],
     }
     write_json(paths["debug"] / "dry_run_report.json", report)
+    write_json(paths["metadata"], report)
     return report
 
 
@@ -455,7 +467,12 @@ def _get_assets_root_path() -> str | None:
     return None
 
 
-def _resolve_robot_usd(robot: str, robot_usd: str | None) -> tuple[str, str, str | None]:
+def _resolve_robot_usd(
+    robot: str,
+    robot_usd: str | None,
+    *,
+    allow_xform_fallback: bool = False,
+) -> tuple[str, str, str | None]:
     if robot_usd:
         path = Path(robot_usd)
         if path.exists():
@@ -464,6 +481,8 @@ def _resolve_robot_usd(robot: str, robot_usd: str | None) -> tuple[str, str, str
             return robot_usd, "explicit_robot_usd", None
         raise FileNotFoundError(f"--robot-usd does not exist: {robot_usd}")
     if robot == "none":
+        if not allow_xform_fallback:
+            raise RuntimeError("--robot none requires --allow-xform-fallback-robot")
         return "", "xform_fallback", "Robot disabled; using a minimal Xform camera rig."
 
     candidates: list[str] = []
@@ -477,6 +496,13 @@ def _resolve_robot_usd(robot: str, robot_usd: str | None) -> tuple[str, str, str
         if _asset_path_exists(candidate):
             return candidate, "auto_robot_asset", None
 
+    message = (
+        "--robot auto could not find a Nova Carter, Carter, or TurtleBot USD. "
+        "Pass --robot-usd explicitly, or pass --allow-xform-fallback-robot for scene photometric smoke testing only."
+    )
+    if not allow_xform_fallback:
+        hints = "\n".join(f"- {hint}" for hint in AUTO_ROBOT_HINTS)
+        raise FileNotFoundError(f"{message}\nSearched common Isaac asset locations. Candidate hints:\n{hints}")
     warning = (
         "--robot auto could not find a Nova Carter, Carter, or TurtleBot USD. "
         "Using a minimal Xform camera rig for replay smoke testing only; do not treat this as final robot data."
@@ -503,7 +529,11 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
             "Run this script with Isaac Sim's python.sh, or use --dry-run with normal Python."
         ) from exc
 
-    scene_path = resolve_scene_usd(args.scene_usd, args.usd_dir)
+    scene_path, scene_info = resolve_scene_usd_with_info(
+        args.scene_usd,
+        args.usd_dir,
+        prefer_latest_usd=bool(args.prefer_latest_usd),
+    )
     trajectory_path = Path(args.trajectory).resolve()
     rows = load_trajectory(trajectory_path, args.max_frames)
     paths = output_paths(Path(args.out).resolve())
@@ -522,20 +552,26 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
         scene_loaded = open_stage(scene_path.as_posix())
         if scene_loaded is False:
             raise RuntimeError(f"Isaac Sim failed to open scene USD: {scene_path}")
-        _add_smoke_test_light()
+        if args.add_smoke_test_light:
+            _add_smoke_test_light()
         world = World(stage_units_in_meters=1.0)
         world.reset()
         if hasattr(world, "play"):
             world.play()
 
         robot_prim_path = "/World/OracleReplayRobot"
-        robot_asset, robot_asset_source, robot_warning = _resolve_robot_usd(args.robot, args.robot_usd)
+        robot_asset, robot_asset_source, robot_warning = _resolve_robot_usd(
+            args.robot,
+            args.robot_usd,
+            allow_xform_fallback=bool(args.allow_xform_fallback_robot),
+        )
         if robot_asset:
             add_reference_to_stage(robot_asset, robot_prim_path)
         else:
             define_prim(robot_prim_path, "Xform")
         robot = RobotPrim(robot_prim_path)
-        _add_camera_fill_light(robot_prim_path, float(args.camera_height_m))
+        if args.add_camera_fill_light:
+            _add_camera_fill_light(robot_prim_path, float(args.camera_height_m))
 
         camera_prim_path = f"{robot_prim_path}/OracleRgbdCamera"
         camera = Camera(
@@ -555,6 +591,9 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
             world.render()
 
         manifest_rows: list[dict[str, Any]] = []
+        rgb_mean_brightness: list[float] = []
+        rgb_black_frames = 0
+        rgb_too_dark_frames = 0
         intrinsics = _intrinsics_from_camera(camera, args.camera_width, args.camera_height)
         for local_idx, row in enumerate(rows):
             x, y, yaw = [float(v) for v in row["base_pose_world"]]
@@ -563,6 +602,12 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
             world.step(render=False)
             rgb, depth, distance = _extract_replicator_frame(rep_annotators, world)
             rgb_arr = _normalize_rgb_frame(rgb, args.camera_width, args.camera_height)
+            mean_brightness = float(np.mean(rgb_arr))
+            rgb_mean_brightness.append(mean_brightness)
+            if int(np.max(rgb_arr)) <= 2 or mean_brightness <= 1.0:
+                rgb_black_frames += 1
+            if mean_brightness < float(args.min_rgb_mean_brightness):
+                rgb_too_dark_frames += 1
             rgb_rel = f"sensors/rgb/{local_idx:06d}.png"
             Image.fromarray(rgb_arr).save(paths["root"] / rgb_rel)
 
@@ -603,7 +648,38 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
             )
 
         write_jsonl(paths["manifest"], manifest_rows)
+        frame_count = len(manifest_rows)
+        black_ratio = rgb_black_frames / frame_count if frame_count else 1.0
+        too_dark_ratio = rgb_too_dark_frames / frame_count if frame_count else 1.0
+        brightness_arr = np.asarray(rgb_mean_brightness, dtype=np.float64)
+        brightness_stats = {
+            "max": float(np.max(brightness_arr)) if brightness_arr.size else None,
+            "mean": float(np.mean(brightness_arr)) if brightness_arr.size else None,
+            "min": float(np.min(brightness_arr)) if brightness_arr.size else None,
+        }
+        used_xform_fallback = robot_asset_source == "xform_fallback"
+        runtime_fill_light = bool(args.add_smoke_test_light or args.add_camera_fill_light)
+        photometric_valid_for_training = bool(
+            frame_count
+            and not runtime_fill_light
+            and rgb_black_frames == 0
+            and rgb_too_dark_frames == 0
+        )
+        robot_specific_valid_for_training = bool(robot_asset and not used_xform_fallback)
+        notes: list[str] = []
+        if robot_warning:
+            notes.append(robot_warning)
+        if runtime_fill_light:
+            notes.append("Runtime fill light was enabled; photometric output is diagnostic only.")
+        if used_xform_fallback:
+            notes.append("Minimal Xform camera rig was used; output is not robot-specific training data.")
+        if not runtime_fill_light and not rgb_black_frames and not rgb_too_dark_frames:
+            notes.append("No runtime fill light was used and RGB brightness passed the configured threshold.")
+        elif not runtime_fill_light:
+            notes.append("No runtime fill light was used, but at least one RGB frame was black or below the brightness threshold.")
         metadata = {
+            "add_camera_fill_light": bool(args.add_camera_fill_light),
+            "add_smoke_test_light": bool(args.add_smoke_test_light),
             "camera": {
                 "height": args.camera_height,
                 "height_m": args.camera_height_m,
@@ -611,17 +687,40 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
                 "width": args.camera_width,
             },
             "dry_run": False,
-            "frame_count": len(manifest_rows),
+            "frame_count": frame_count,
+            "min_rgb_mean_brightness": float(args.min_rgb_mean_brightness),
+            "notes": notes,
+            "photometric_valid_for_training": photometric_valid_for_training,
+            "prefer_latest_usd": bool(args.prefer_latest_usd),
+            "resolved_scene_usd": scene_path.as_posix(),
             "robot": args.robot,
             "robot_asset": robot_asset,
             "robot_asset_source": robot_asset_source,
+            "robot_specific_valid_for_training": robot_specific_valid_for_training,
             "robot_warning": robot_warning,
+            "rgb_black_frame_count": rgb_black_frames,
+            "rgb_black_frame_ratio": black_ratio,
+            "rgb_mean_brightness": brightness_stats,
+            "rgb_too_dark_frame_count": rgb_too_dark_frames,
+            "rgb_too_dark_frame_ratio": too_dark_ratio,
             "scene_id": args.scene_id,
             "scene_loaded": True,
             "scene_usd": scene_path.as_posix(),
+            "selected_by": scene_info["selected_by"],
+            "source_of_truth": "usd",
+            "replay_scene_usd": scene_path.as_posix(),
             "trajectory": trajectory_path.as_posix(),
+            "usd_candidates": scene_info["usd_candidates"],
+            "usd_dir": scene_info["usd_dir"],
+            "used_xform_fallback": used_xform_fallback,
         }
         write_json(paths["metadata"], metadata)
+        if args.fail_on_black_rgb and (rgb_black_frames or rgb_too_dark_frames):
+            raise RuntimeError(
+                "RGB brightness check failed: "
+                f"black_frames={rgb_black_frames}, too_dark_frames={rgb_too_dark_frames}, "
+                f"min_rgb_mean_brightness={args.min_rgb_mean_brightness}"
+            )
         return metadata
     except Exception as exc:
         write_json(

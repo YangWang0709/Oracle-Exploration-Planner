@@ -28,6 +28,31 @@ def test_wall_like_object_classification() -> None:
     assert "wall" in result.reason
 
 
+def test_usd_imported_room_floor_with_underscore() -> None:
+    result = classify_object(
+        ObjectFeatures(
+            name="bedroom_0_1_floor",
+            collections=("Scene Collection",),
+            bbox_min=(4.123, -2.877, 0.108),
+            bbox_max=(9.877, 4.0, 0.123),
+        )
+    )
+    assert result.label == "floor"
+
+
+def test_usd_imported_room_wall_with_underscore() -> None:
+    result = classify_object(
+        ObjectFeatures(
+            name="living_room_0_0_wall",
+            collections=("Scene Collection",),
+            bbox_min=(0.0, -0.45, 0.108),
+            bbox_max=(15.0, 12.87, 2.94),
+        )
+    )
+    assert result.label == "obstacle"
+    assert "wall" in result.reason
+
+
 def test_ceiling_ignored() -> None:
     result = classify_object(
         ObjectFeatures(
@@ -62,4 +87,3 @@ def test_tiny_decorative_object_ignored() -> None:
         )
     )
     assert result.label == "ignored"
-

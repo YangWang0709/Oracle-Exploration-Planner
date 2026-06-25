@@ -147,7 +147,7 @@ def classify_object(features: ObjectFeatures) -> ObjectClassification:
     if "ceilinglight" in text:
         return ObjectClassification("ignored", "ceiling light")
 
-    if "room_floor" in text or ".floor" in text or "floor." in text:
+    if "room_floor" in text or ".floor" in text or "floor." in text or "_floor" in text:
         return ObjectClassification("floor", "room floor geometry")
     if "rug" in text:
         return ObjectClassification("floor_cover", "floor covering/rug")
@@ -157,7 +157,7 @@ def classify_object(features: ObjectFeatures) -> ObjectClassification:
     if "room_shells" in text or "room_meshes" in text:
         return ObjectClassification("ignored", "room shell/helper mesh")
 
-    if any(keyword in text for keyword in WALL_KEYWORDS):
+    if any(keyword in text for keyword in WALL_KEYWORDS) or "_wall" in text:
         return ObjectClassification("obstacle", "wall or skirting geometry", obstacle_priority=100)
 
     if any(keyword in text for keyword in MOUNTED_IGNORE_KEYWORDS):
@@ -181,4 +181,3 @@ def classify_object(features: ObjectFeatures) -> ObjectClassification:
         return ObjectClassification("obstacle", "generic low static obstacle", obstacle_priority=20)
 
     return ObjectClassification("ignored", "unclassified low-priority geometry")
-

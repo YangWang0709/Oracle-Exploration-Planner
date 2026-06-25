@@ -40,6 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build an oracle map from Blender scene geometry.")
     parser.add_argument("--scene-root", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--scene-id", default=None)
+    parser.add_argument("--replay-scene-usd", default=None)
     parser.add_argument("--resolution", type=float, default=0.05)
     parser.add_argument("--robot-radius", type=float, default=0.30)
     parser.add_argument("--wall-thickness", type=float, default=0.12)
@@ -247,9 +249,19 @@ def save_object_footprints_png(path: str | Path, floor_mask: np.ndarray, obstacl
     return save_png(path, rgb, scale=2)
 
 
-def build_map(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
+def build_map(
+    args: argparse.Namespace,
+    *,
+    backend: str = "blender_geometry",
+    meta_overrides: dict[str, Any] | None = None,
+    source_files_extra: dict[str, Any] | None = None,
+    source_notes: list[str] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     scene_root = Path(args.scene_root)
-    blend_path = Path(bpy.data.filepath)
+    blend_path = Path(bpy.data.filepath).resolve() if bpy.data.filepath else None
+    scene_id = getattr(args, "scene_id", None) or scene_root.name
+    replay_scene_usd_arg = getattr(args, "replay_scene_usd", None)
+    replay_scene_usd = Path(replay_scene_usd_arg).resolve().as_posix() if replay_scene_usd_arg else None
     mesh_objects = [obj for obj in bpy.context.scene.objects if obj.type == "MESH"]
 
     records: list[dict[str, Any]] = []
@@ -343,36 +355,47 @@ def build_map(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]
     }
     summary_path = write_json(out / "object_classification_summary.json", summary)
 
+    notes = [
+        "Floor geometry is rasterized from horizontal room-floor mesh faces.",
+        "Wall/skirting geometry is rasterized from mesh edges with finite wall-thickness.",
+        "Furniture and large static object footprints use conservative world AABB footprints.",
+        "Tiny decorative objects, ceiling, placeholders, cameras/lights, and elevated wall items are ignored.",
+    ]
+    notes.extend(source_notes or [])
     meta = {
-        "backend": "blender_geometry",
-        "blend_path": blend_path.as_posix(),
+        "backend": backend,
         "coordinate_convention": "grid[i,j], row i increases with world y, column j increases with world x; origin_world_xy is lower-left cell corner",
         "fallback_used": False,
+        "floor_object_count": int(len(floor_objects)),
         "floor_objects_count": int(len(floor_objects)),
         "height": int(height),
+        "ignored_object_count": int(len(ignored_objects)),
         "ignored_objects_count": int(len(ignored_objects)),
-        "notes": [
-            "Floor geometry is rasterized from horizontal room-floor mesh faces.",
-            "Wall/skirting geometry is rasterized from mesh edges with finite wall-thickness.",
-            "Furniture and large static object footprints use conservative world AABB footprints.",
-            "Tiny decorative objects, ceiling, placeholders, cameras/lights, and elevated wall items are ignored.",
-        ],
+        "notes": notes,
+        "obstacle_object_count": int(len(obstacle_objects)),
         "obstacle_objects_count": int(len(obstacle_objects)),
         "origin_world_xy": [float(origin[0]), float(origin[1])],
+        "reachable_cells": int(reachable.sum()),
         "resolution": float(args.resolution),
+        "replay_scene_usd": replay_scene_usd,
         "robot_radius": float(args.robot_radius),
+        "scene_id": scene_id,
         "scene_root": scene_root.as_posix(),
         "width": int(width),
     }
+    if blend_path is not None:
+        meta["blend_path"] = blend_path.as_posix()
+    meta.update(meta_overrides or {})
     write_json(out / "map_meta.json", meta)
-    write_json(
-        out / "source_files.json",
-        {
-            "blend_path": blend_path.as_posix(),
-            "scene_root": scene_root.as_posix(),
-            "script": Path(__file__).as_posix(),
-        },
-    )
+    source_files = {
+        "replay_scene_usd": replay_scene_usd,
+        "scene_root": scene_root.as_posix(),
+        "script": Path(__file__).as_posix(),
+    }
+    if blend_path is not None:
+        source_files["blend_path"] = blend_path.as_posix()
+    source_files.update(source_files_extra or {})
+    write_json(out / "source_files.json", source_files)
 
     debug_map = save_png(
         out / "debug_topdown_map.png",
@@ -431,4 +454,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

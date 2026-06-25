@@ -25,6 +25,11 @@ Isaac Sim replay is implemented in `scripts/replay_path_collect_rgbd_isaac.py`. 
 
 Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 
+The current photometric validation scene is seed 201, documented in
+`docs/SEED_201_USD_SOURCE_OF_TRUTH.md` and `docs/SEED_201_ADJUSTED_RESULTS.md`.
+Seed 16 is retained as the older problem scene: its RGB replay was too dark for
+photometric supervision and should not be used as the primary photometric test.
+
 ## Default Planner Parameters
 
 - `map_resolution = 0.05`
@@ -33,6 +38,63 @@ Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 - `coverage_threshold = 0.98`
 - `waypoint_spacing = 0.50`
 - `step_size = 0.25`
+
+## Current Seed 201 Plan
+
+For seed 201, use the user-adjusted USD scene:
+
+`/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201`
+
+Adjusted USD source of truth:
+
+`/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc`
+
+The user edits were saved in Isaac Sim to USD/USDC, not to `coarse/scene.blend`.
+Do not use `coarse/scene.blend` as the seed 201 adjusted map source of truth.
+The old blend backend is still useful for generated scenes without manual USD
+edits, and for diagnostics/comparison.
+
+Primary map-building route:
+
+```bash
+/home/ubuntu22/infinigen/blender/blender -b \
+  --python scripts/build_oracle_map_from_usd_with_blender.py -- \
+  --scene-root "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201" \
+  --scene-usd auto \
+  --usd-dir "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd" \
+  --prefer-latest-usd \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
+  --resolution 0.05 \
+  --robot-radius 0.30
+```
+
+Path planning route:
+
+```bash
+python scripts/plan_oracle_path.py \
+  --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/trajectory_usd_blender" \
+  --coverage-threshold 0.98 \
+  --coverage-radius 0.75 \
+  --waypoint-spacing 0.50 \
+  --step-size 0.25 \
+  --start auto
+```
+
+Current validated seed 201 result:
+
+- Map backend: `usd_imported_blender_geometry`
+- Source of truth: `usd`
+- `used_blend`: `false`
+- `fallback_used`: `false`
+- Map size: `348 x 438`
+- Reachable cells: `23691`
+- Sparse waypoints: `62`
+- Dense frames: `6526`
+- Final coverage: `0.9808366046177873`
+- No-fill RGB-D smoke test: passed with RGB black-frame ratio `0.0`
+- `photometric_valid_for_training`: `true`
+- `robot_specific_valid_for_training`: `false` until a real robot USD is available
 
 ## Seed 16 Plan
 
@@ -95,6 +157,22 @@ Generated map, path, image, and dataset artifacts remain under `outputs/` and ar
 
 ## Isaac Replay
 
+Runtime lighting is now explicit. By default the replay script adds no distant
+light and no camera fill light. Use `--add-smoke-test-light` or
+`--add-camera-fill-light` only for diagnostics; any runtime fill light makes
+`photometric_valid_for_training=false` in `metadata.json`.
+
+For adjusted USD scenes such as seed 201, pass `--scene-usd auto
+--prefer-latest-usd --usd-dir <USD_DIR>`. The replay script records all USD
+candidates, the resolved scene path, and `selected_by` in dry-run reports and
+metadata. Seed 16 and other older runs can still pass an explicit `--scene-usd`
+without changing behavior.
+
+Robot fallback is also explicit. `--robot auto` fails if a real robot asset
+cannot be resolved. Use `--allow-xform-fallback-robot` only for scene
+photometric smoke testing; Xform fallback makes
+`robot_specific_valid_for_training=false`.
+
 Dry-run command:
 
 ```bash
@@ -153,6 +231,9 @@ Expected collection outputs:
 
 If `--robot auto` cannot resolve a Nova Carter, Carter, or TurtleBot asset from the Isaac assets root, pass `--robot-usd` explicitly. If no robot asset is available, the script can fall back to a minimal Xform camera rig and writes `robot_asset_source=xform_fallback` plus a warning in `metadata.json`. That fallback is only valid for camera replay smoke testing and must not be treated as final robot-specific data.
 
+The fallback path now requires `--allow-xform-fallback-robot`; it is no longer
+used silently.
+
 Smoke-test QA:
 
 ```bash
@@ -165,10 +246,15 @@ The QA script reports:
 
 - Manifest, RGB, depth, and `distance_to_camera` counts.
 - RGB black-frame ratio.
+- RGB mean brightness min/mean/max and too-dark ratio.
 - Depth finite ratio and value ranges.
 - Camera intrinsics completeness.
 - Camera pose changes across replay frames.
 - Quaternion norm min/mean/max.
+- Metadata flags for photometric validity, robot-specific validity, Xform fallback, and runtime fill lights.
 - Pass/fail and a contact sheet under `debug/`.
+
+Use `--require-photometric-valid` or `--require-robot-specific-valid` when the
+smoke-test dataset must satisfy those metadata flags.
 
 Isaac Core `camera.get_world_pose()` is treated as returning quaternion orientation in `wxyz` order, which is saved directly in `frame_manifest.jsonl`. If a specific Isaac version returns `xyzw`, pass `--camera-quaternion-convention xyzw` to convert manifest output to `wxyz`. Missing depth or distance annotator output is now a hard error rather than silently saving invalid `.npy` files.
