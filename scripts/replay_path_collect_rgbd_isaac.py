@@ -155,20 +155,6 @@ def _manual_route_metadata(trajectory_path: Path, route_source: str, rows: list[
     return result
 
 
-def _approved_route_metadata(trajectory_path: Path, route_source: str, rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    rows = rows or []
-    approved_route_ids = {str(row.get("approved_route_id")) for row in rows if row.get("approved_route_id")}
-    approved_route_id = next(iter(approved_route_ids)) if len(approved_route_ids) == 1 else None
-    is_approved = route_source in {"auto_approved", "auto_exploration_approved"} and bool(approved_route_id)
-    result: dict[str, Any] = {
-        "approved_route_id": approved_route_id,
-        "route_is_user_approved": is_approved,
-    }
-    if route_source in {"auto_approved", "auto_exploration_approved"}:
-        result["approved_trajectory"] = trajectory_path.as_posix()
-    return result
-
-
 def output_paths(out_root: str | Path) -> dict[str, Path]:
     out = ensure_dir(out_root)
     return {
@@ -194,7 +180,6 @@ def run_dry_run(args: argparse.Namespace) -> dict[str, Any]:
     rows = load_trajectory(trajectory_path, args.max_frames)
     route_source = infer_route_source(rows)
     manual_meta = _manual_route_metadata(trajectory_path, route_source, rows)
-    approved_meta = _approved_route_metadata(trajectory_path, route_source, rows)
     paths = output_paths(Path(args.out).resolve())
     report = {
         "add_camera_fill_light": bool(args.add_camera_fill_light),
@@ -211,7 +196,6 @@ def run_dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "headless": bool(args.headless),
         "min_rgb_mean_brightness": float(args.min_rgb_mean_brightness),
         **manual_meta,
-        **approved_meta,
         "out": paths["root"].as_posix(),
         "prefer_latest_usd": bool(args.prefer_latest_usd),
         "replay_scene_usd": scene_path.as_posix(),
@@ -621,7 +605,6 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
     rows = load_trajectory(trajectory_path, args.max_frames)
     route_source = infer_route_source(rows)
     manual_meta = _manual_route_metadata(trajectory_path, route_source, rows)
-    approved_meta = _approved_route_metadata(trajectory_path, route_source, rows)
     paths = output_paths(Path(args.out).resolve())
 
     simulation_app = SimulationApp({"headless": bool(args.headless)})
@@ -713,8 +696,6 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
             manifest_rows.append(
                 {
                     "base_pose_world": [x, y, yaw],
-                    "approved_route_frame_idx": int(row.get("frame_idx", local_idx)) if route_source in {"auto_approved", "auto_exploration_approved"} else None,
-                    "approved_route_id": row.get("approved_route_id"),
                     "camera_intrinsics": intrinsics,
                     "camera_pose_world": {
                         "position": [float(v) for v in cam_pos],
@@ -733,7 +714,6 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
                     "nearest_manual_waypoint_idx": row.get("nearest_manual_waypoint_idx"),
                     "pose_annotation_mode": row.get("pose_annotation_mode"),
                     "rgb_path": rgb_rel,
-                    "route_is_user_approved": bool(route_source in {"auto_approved", "auto_exploration_approved"} and row.get("approved_route_id")),
                     "route_source": row.get("route_source", route_source),
                     "scene_id": args.scene_id,
                     "timestamp": float(row.get("t", local_idx)),
@@ -785,7 +765,6 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
             "frame_count": frame_count,
             "min_rgb_mean_brightness": float(args.min_rgb_mean_brightness),
             **manual_meta,
-            **approved_meta,
             "notes": notes,
             "photometric_valid_for_training": photometric_valid_for_training,
             "prefer_latest_usd": bool(args.prefer_latest_usd),
