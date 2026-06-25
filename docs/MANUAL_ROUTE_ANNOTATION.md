@@ -15,6 +15,8 @@ The automatic `trajectory_usd_blender` output can still be used as a reference t
 
 The clean top-down render, manual annotation, manual trajectory builder, and replay should all use this same adjusted USD-derived map. Do not use `coarse/scene.blend` for seed 201 manual routes.
 
+Earlier manual base renders could be incomplete because the camera bounds were derived from the oracle map bounds rather than from the adjusted USD scene bounds. The current renderer computes visible geometry world bounds from the adjusted USD stage with `UsdGeom.BBoxCache`, then fits an orthographic camera around those bounds. `map_world_bounds()` is now only a fallback/comparison path; if metadata says `bounds_source=map_meta_fallback`, the base map QA fails by default.
+
 ## Workflow
 
 1. Render a clean full-scene top-down base image from the adjusted USD.
@@ -41,19 +43,28 @@ Render the base image:
   --render-width 3000 \
   --render-height 3000 \
   --full-scene \
-  --margin-m 1.0 \
+  --margin-m 2.0 \
   --random-seed 0 \
-  --random-start
+  --random-start \
+  --strict-orthographic
 ```
 
 Outputs:
 
 - `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png`
 - `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_metadata.json`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_bounds_debug.json`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_with_bounds_frame.png`
 - `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_with_start.png`
-- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/render_report.json`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_render_report.json`
 
-The clean PNG is the annotation entry point and contains no route, no direction indicators, no waypoint overlay, and no start marker. The optional start overlay is a separate reference image.
+The clean PNG is the annotation entry point and contains no route, no direction indicators, no waypoint overlay, and no start marker. Open it with:
+
+```bash
+xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png"
+```
+
+Do not use `topdown_base.png` as the recommended annotation entry point. To inspect whether the scene was cropped, open `full_scene_topdown_with_bounds_frame.png`; it draws the final image bounds and the oracle map bounds for comparison. The optional start overlay is a separate reference image.
 
 Base map QA:
 
@@ -167,6 +178,10 @@ python scripts/qa_manual_route_replay.py \
 - `start_pose_world`
 - `start_pose_source`
 - `min_start_clearance_m`
+- `bounds_source=usd_stage_visible_geometry_bounds`
+- `raw_usd_world_bounds`
+- `final_world_bounds_xy`
+- `included_prim_count`
 
 The annotator uses this start as waypoint `0`. User clicks become waypoint `1`, `2`, and so on. The saved world waypoint file separates `start_pose_world`, `user_waypoints`, and `full_waypoints`.
 

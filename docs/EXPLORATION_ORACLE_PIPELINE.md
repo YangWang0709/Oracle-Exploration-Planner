@@ -162,8 +162,10 @@ Manual annotation artifacts:
 
 - `manual_annotation/full_scene_topdown_clean.png`
 - `manual_annotation/full_scene_topdown_metadata.json`
+- `manual_annotation/full_scene_topdown_bounds_debug.json`
+- `manual_annotation/full_scene_topdown_with_bounds_frame.png`
 - `manual_annotation/full_scene_topdown_with_start.png`
-- `manual_annotation/render_report.json`
+- `manual_annotation/full_scene_topdown_render_report.json`
 - `manual_annotation/manual_base_map_qa.json`
 - `manual_route/manual_waypoints_image.json`
 - `manual_route/manual_waypoints_world.json`
@@ -307,6 +309,8 @@ This seed 201 pilot used no runtime fill light and wrote `photometric_valid_for_
 
 Use the same adjusted USD-derived map to render a clean top-down base image:
 
+The full-scene base image must be fit from adjusted USD visible geometry bounds, not from oracle map bounds. `map_world_bounds()` is only a fallback/comparison source; `qa_manual_base_map.py` fails by default if the renderer had to fall back to `bounds_source=map_meta_fallback`.
+
 ```bash
 /home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/render_manual_annotation_base_topdown_isaac.py \
   --scene-id "seed_201_adjusted_usd_test" \
@@ -317,11 +321,14 @@ Use the same adjusted USD-derived map to render a clean top-down base image:
   --render-width 3000 \
   --render-height 3000 \
   --full-scene \
-  --margin-m 1.0 \
+  --margin-m 2.0 \
   --random-start \
   --random-seed 0 \
-  --min-start-clearance-m 0.30
+  --min-start-clearance-m 0.30 \
+  --strict-orthographic
 ```
+
+Open `manual_annotation/full_scene_topdown_clean.png` for annotation. Use `manual_annotation/full_scene_topdown_with_bounds_frame.png` only to verify that the USD scene and map bounds were not cropped. Do not use `topdown_base.png` as the recommended entry point.
 
 Then let the user click route waypoints:
 

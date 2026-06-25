@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import math
 import sys
@@ -47,9 +48,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--render-width", type=int, default=3000)
     parser.add_argument("--render-height", type=int, default=3000)
-    parser.add_argument("--camera-height", type=float, default=35.0)
+    parser.add_argument("--camera-height", default="auto")
     parser.add_argument("--full-scene", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--margin-m", type=float, default=1.0)
+    parser.add_argument("--margin-m", type=float, default=2.0)
+    parser.add_argument("--strict-orthographic", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--random-start", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--random-seed", type=int, default=0)
     parser.add_argument("--start", nargs=3, type=float, metavar=("X", "Y", "YAW"), default=None)
@@ -81,17 +83,35 @@ def _extract_rgb(annotator: Any, world: Any, width: int, height: int, max_attemp
     raise RuntimeError(f"RGB annotator did not return nonempty data; last_shape={last_shape}")
 
 
-def _configure_camera(stage: Any, camera_prim_path: str, span_x: float, span_y: float, camera_height: float) -> dict[str, Any]:
-    from pxr import UsdGeom
+def _configure_camera(
+    stage: Any,
+    camera_prim_path: str,
+    span_x: float,
+    span_y: float,
+    camera_height: float,
+    z_min: float,
+    *,
+    strict_orthographic: bool,
+) -> dict[str, Any]:
+    from pxr import Sdf, UsdGeom
 
-    usd_camera = UsdGeom.Camera(stage.GetPrimAtPath(camera_prim_path))
+    prim = stage.GetPrimAtPath(camera_prim_path)
+    usd_camera = UsdGeom.Camera(prim)
     usd_camera.CreateProjectionAttr().Set(UsdGeom.Tokens.orthographic)
     usd_camera.CreateHorizontalApertureAttr().Set(float(span_x))
     usd_camera.CreateVerticalApertureAttr().Set(float(span_y))
-    usd_camera.CreateClippingRangeAttr().Set((0.01, float(max(camera_height * 3.0, 100.0))))
-    if usd_camera.GetProjectionAttr().Get() != UsdGeom.Tokens.orthographic:
+    prim.CreateAttribute("orthographicScale", Sdf.ValueTypeNames.Float, custom=True).Set(float(max(span_x, span_y)))
+    far_clip = max(float(camera_height - z_min + 10.0), float(camera_height * 3.0), 100.0)
+    usd_camera.CreateClippingRangeAttr().Set((0.01, far_clip))
+    projection = usd_camera.GetProjectionAttr().Get()
+    if strict_orthographic and projection != UsdGeom.Tokens.orthographic:
         raise RuntimeError("Failed to configure an orthographic camera for manual annotation.")
-    return {"notes": [], "projection": "orthographic"}
+    return {
+        "clipping_range": [0.01, far_clip],
+        "notes": ["Camera prim was configured directly with USD orthographic projection attributes."],
+        "orthographic_scale": float(max(span_x, span_y)),
+        "projection": str(projection),
+    }
 
 
 def _fit_bounds_to_aspect(bounds: dict[str, Any], aspect: float) -> dict[str, Any]:
@@ -116,6 +136,33 @@ def _fit_bounds_to_aspect(bounds: dict[str, Any], aspect: float) -> dict[str, An
     }
 
 
+def _xy_bounds_dict(min_x: float, min_y: float, max_x: float, max_y: float) -> dict[str, float]:
+    return {
+        "max_x": float(max_x),
+        "max_y": float(max_y),
+        "min_x": float(min_x),
+        "min_y": float(min_y),
+    }
+
+
+def _xyz_bounds_dict(
+    min_x: float,
+    min_y: float,
+    min_z: float,
+    max_x: float,
+    max_y: float,
+    max_z: float,
+) -> dict[str, float]:
+    return {
+        "max_x": float(max_x),
+        "max_y": float(max_y),
+        "max_z": float(max_z),
+        "min_x": float(min_x),
+        "min_y": float(min_y),
+        "min_z": float(min_z),
+    }
+
+
 def _bounds_from_xy(min_x: float, min_y: float, max_x: float, max_y: float, *, margin_m: float, aspect: float) -> dict[str, Any]:
     margin = max(0.0, float(margin_m))
     bounds = {
@@ -132,58 +179,237 @@ def _map_meta_bounds(meta: dict[str, Any], *, margin_m: float, aspect: float) ->
     return _bounds_from_xy(min_x, min_y, max_x, max_y, margin_m=margin_m, aspect=aspect)
 
 
-def _usd_visible_mesh_world_bounds(stage: Any, *, margin_m: float, aspect: float) -> tuple[dict[str, Any], dict[str, Any]]:
-    from pxr import Usd, UsdGeom
+def _map_bounds_xy(meta: dict[str, Any]) -> dict[str, float]:
+    bounds = map_world_bounds(meta, padding_ratio=0.0, aspect=None)
+    min_x, min_y = bounds["bounds_min_xy"]
+    max_x, max_y = bounds["bounds_max_xy"]
+    return _xy_bounds_dict(min_x, min_y, max_x, max_y)
+
+
+def _compare_bounds(usd_bounds: dict[str, float], map_bounds: dict[str, float]) -> dict[str, Any]:
+    deltas = {
+        "usd_extra_min_x_m": max(0.0, float(map_bounds["min_x"]) - float(usd_bounds["min_x"])),
+        "usd_extra_min_y_m": max(0.0, float(map_bounds["min_y"]) - float(usd_bounds["min_y"])),
+        "usd_extra_max_x_m": max(0.0, float(usd_bounds["max_x"]) - float(map_bounds["max_x"])),
+        "usd_extra_max_y_m": max(0.0, float(usd_bounds["max_y"]) - float(map_bounds["max_y"])),
+        "map_extra_min_x_m": max(0.0, float(usd_bounds["min_x"]) - float(map_bounds["min_x"])),
+        "map_extra_min_y_m": max(0.0, float(usd_bounds["min_y"]) - float(map_bounds["min_y"])),
+        "map_extra_max_x_m": max(0.0, float(map_bounds["max_x"]) - float(usd_bounds["max_x"])),
+        "map_extra_max_y_m": max(0.0, float(map_bounds["max_y"]) - float(usd_bounds["max_y"])),
+    }
+    usd_span_x = max(float(usd_bounds["max_x"]) - float(usd_bounds["min_x"]), 1e-9)
+    usd_span_y = max(float(usd_bounds["max_y"]) - float(usd_bounds["min_y"]), 1e-9)
+    map_span_x = max(float(map_bounds["max_x"]) - float(map_bounds["min_x"]), 1e-9)
+    map_span_y = max(float(map_bounds["max_y"]) - float(map_bounds["min_y"]), 1e-9)
+    return {
+        "deltas_m": deltas,
+        "map_extends_beyond_usd_bounds": any(deltas[key] > 1e-6 for key in ("map_extra_min_x_m", "map_extra_min_y_m", "map_extra_max_x_m", "map_extra_max_y_m")),
+        "usd_bounds_area_m2": usd_span_x * usd_span_y,
+        "usd_bounds_clearly_larger_than_map_bounds": (usd_span_x * usd_span_y) > (map_span_x * map_span_y * 1.05),
+        "usd_extends_beyond_map_bounds": any(deltas[key] > 1e-6 for key in ("usd_extra_min_x_m", "usd_extra_min_y_m", "usd_extra_max_x_m", "usd_extra_max_y_m")),
+        "map_bounds_area_m2": map_span_x * map_span_y,
+    }
+
+
+def _union_xy_bounds(a: dict[str, float], b: dict[str, float]) -> dict[str, float]:
+    return _xy_bounds_dict(
+        min(float(a["min_x"]), float(b["min_x"])),
+        min(float(a["min_y"]), float(b["min_y"])),
+        max(float(a["max_x"]), float(b["max_x"])),
+        max(float(a["max_y"]), float(b["max_y"])),
+    )
+
+
+def _is_light_prim(prim: Any, UsdLux: Any) -> bool:
+    type_name = prim.GetTypeName()
+    if type_name and "Light" in type_name:
+        return True
+    try:
+        return bool(prim.HasAPI(UsdLux.LightAPI))
+    except Exception:
+        return False
+
+
+def _excluded(reason_counts: Counter[str], reason: str) -> None:
+    reason_counts[reason] += 1
+
+
+def _point_based_world_bounds_for_prim(prim: Any, UsdGeom: Any, xform_cache: Any) -> tuple[float, float, float, float, float, float] | None:
+    if not prim.IsA(UsdGeom.PointBased):
+        return None
+    points = UsdGeom.PointBased(prim).GetPointsAttr().Get()
+    if not points:
+        return None
+    matrix = xform_cache.GetLocalToWorldTransform(prim)
+    world_points = []
+    for point in points:
+        world = matrix.Transform(point)
+        vals = [float(world[0]), float(world[1]), float(world[2])]
+        if all(np.isfinite(vals)):
+            world_points.append(vals)
+    if not world_points:
+        return None
+    arr = np.asarray(world_points, dtype=np.float64)
+    return (
+        float(arr[:, 0].min()),
+        float(arr[:, 1].min()),
+        float(arr[:, 2].min()),
+        float(arr[:, 0].max()),
+        float(arr[:, 1].max()),
+        float(arr[:, 2].max()),
+    )
+
+
+def compute_usd_visible_scene_bounds_xy(
+    stage: Any,
+    *,
+    include_invisible: bool = False,
+    ignore_cameras_lights: bool = True,
+    margin_m: float,
+    aspect: float,
+    map_bounds_xy: dict[str, float] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    from pxr import Usd, UsdGeom, UsdLux, UsdShade
 
     purposes = [UsdGeom.Tokens.default_, UsdGeom.Tokens.render, UsdGeom.Tokens.proxy]
     bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), purposes, useExtentsHint=True)
-    mins: list[tuple[float, float, float]] = []
-    maxs: list[tuple[float, float, float]] = []
-    mesh_count = 0
-    skipped_invisible = 0
+    xform_cache = UsdGeom.XformCache(Usd.TimeCode.Default())
+    included: list[dict[str, Any]] = []
+    method_counts: Counter[str] = Counter()
+    skipped_reason_counts: Counter[str] = Counter()
     for prim in stage.Traverse():
-        if not prim.IsActive() or not prim.IsA(UsdGeom.Mesh):
+        if not prim.IsActive():
+            _excluded(skipped_reason_counts, "inactive")
+            continue
+        if ignore_cameras_lights and prim.IsA(UsdGeom.Camera):
+            _excluded(skipped_reason_counts, "camera")
+            continue
+        if ignore_cameras_lights and _is_light_prim(prim, UsdLux):
+            _excluded(skipped_reason_counts, "light")
+            continue
+        if prim.IsA(UsdGeom.Scope):
+            _excluded(skipped_reason_counts, "scope")
+            continue
+        if prim.IsA(UsdShade.Material):
+            _excluded(skipped_reason_counts, "material")
+            continue
+        if not prim.IsA(UsdGeom.Imageable):
+            _excluded(skipped_reason_counts, "not_imageable")
             continue
         imageable = UsdGeom.Imageable(prim)
-        if imageable and imageable.ComputeVisibility() == UsdGeom.Tokens.invisible:
-            skipped_invisible += 1
+        if not include_invisible and imageable.ComputeVisibility() == UsdGeom.Tokens.invisible:
+            _excluded(skipped_reason_counts, "invisible")
             continue
+        method = "bbox_cache"
+        vals: list[float] | None = None
         try:
             aligned = bbox_cache.ComputeWorldBound(prim).ComputeAlignedBox()
             if aligned.IsEmpty():
-                continue
-            min_v = aligned.GetMin()
-            max_v = aligned.GetMax()
-            vals = [float(min_v[0]), float(min_v[1]), float(min_v[2]), float(max_v[0]), float(max_v[1]), float(max_v[2])]
-            if not all(np.isfinite(vals)):
-                continue
-            if vals[3] < vals[0] or vals[4] < vals[1]:
-                continue
-            mins.append((vals[0], vals[1], vals[2]))
-            maxs.append((vals[3], vals[4], vals[5]))
-            mesh_count += 1
+                fallback = _point_based_world_bounds_for_prim(prim, UsdGeom, xform_cache)
+                if fallback is None:
+                    _excluded(skipped_reason_counts, "empty_bbox")
+                    continue
+                vals = [float(v) for v in fallback]
+                method = "point_based_world_points_fallback"
+            else:
+                min_v = aligned.GetMin()
+                max_v = aligned.GetMax()
+                vals = [float(min_v[0]), float(min_v[1]), float(min_v[2]), float(max_v[0]), float(max_v[1]), float(max_v[2])]
         except Exception:
+            fallback = _point_based_world_bounds_for_prim(prim, UsdGeom, xform_cache)
+            if fallback is None:
+                _excluded(skipped_reason_counts, "bbox_exception")
+                continue
+            vals = [float(v) for v in fallback]
+            method = "point_based_world_points_fallback"
+        if not all(np.isfinite(vals)):
+            _excluded(skipped_reason_counts, "nonfinite_bbox")
             continue
-    if not mins:
-        raise RuntimeError("No visible mesh world bounds could be computed from the USD stage.")
-    min_arr = np.asarray(mins, dtype=np.float64)
-    max_arr = np.asarray(maxs, dtype=np.float64)
+        if vals[3] < vals[0] or vals[4] < vals[1] or vals[5] < vals[2]:
+            _excluded(skipped_reason_counts, "invalid_bbox")
+            continue
+        span_x = vals[3] - vals[0]
+        span_y = vals[4] - vals[1]
+        included.append(
+            {
+                "bounds_method": method,
+                "path": prim.GetPath().pathString,
+                "type_name": str(prim.GetTypeName()),
+                "world_bounds": _xyz_bounds_dict(vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]),
+                "xy_area_m2": float(max(span_x, 0.0) * max(span_y, 0.0)),
+            }
+        )
+        method_counts[method] += 1
+    if not included:
+        raise RuntimeError("No visible geometry world bounds could be computed from the USD stage.")
+    raw = _xyz_bounds_dict(
+        min(float(item["world_bounds"]["min_x"]) for item in included),
+        min(float(item["world_bounds"]["min_y"]) for item in included),
+        min(float(item["world_bounds"]["min_z"]) for item in included),
+        max(float(item["world_bounds"]["max_x"]) for item in included),
+        max(float(item["world_bounds"]["max_y"]) for item in included),
+        max(float(item["world_bounds"]["max_z"]) for item in included),
+    )
+    usd_xy = _xy_bounds_dict(raw["min_x"], raw["min_y"], raw["max_x"], raw["max_y"])
+    fit_input_xy = usd_xy
+    comparison: dict[str, Any] | None = None
+    if map_bounds_xy is not None:
+        fit_input_xy = _union_xy_bounds(usd_xy, map_bounds_xy)
+        comparison = _compare_bounds(usd_xy, map_bounds_xy)
     bounds = _bounds_from_xy(
-        float(min_arr[:, 0].min()),
-        float(min_arr[:, 1].min()),
-        float(max_arr[:, 0].max()),
-        float(max_arr[:, 1].max()),
+        fit_input_xy["min_x"],
+        fit_input_xy["min_y"],
+        fit_input_xy["max_x"],
+        fit_input_xy["max_y"],
         margin_m=margin_m,
         aspect=aspect,
     )
+    final_xy = _xy_bounds_dict(
+        bounds["bounds_min_xy"][0],
+        bounds["bounds_min_xy"][1],
+        bounds["bounds_max_xy"][0],
+        bounds["bounds_max_xy"][1],
+    )
+    top_largest = sorted(included, key=lambda item: float(item["xy_area_m2"]), reverse=True)[:50]
     report = {
-        "bounds_source": "usd_visible_mesh_world_bounds",
-        "mesh_count": mesh_count,
-        "skipped_invisible_mesh_count": skipped_invisible,
-        "z_min": float(min_arr[:, 2].min()),
-        "z_max": float(max_arr[:, 2].max()),
+        "bounds_source": "usd_stage_visible_geometry_bounds",
+        "excluded_prim_count": int(sum(skipped_reason_counts.values())),
+        "final_bounds_after_margin": final_xy,
+        "fit_input_bounds_xy": fit_input_xy,
+        "included_prim_count": int(len(included)),
+        "included_prim_method_counts": dict(sorted(method_counts.items())),
+        "raw_usd_world_bounds": raw,
+        "skipped_reason_counts": dict(sorted(skipped_reason_counts.items())),
+        "top_largest_included_prims_by_xy_area": top_largest,
+        "usd_bounds_vs_map_bounds": comparison,
+        "z_max": raw["max_z"],
+        "z_min": raw["min_z"],
     }
     return bounds, report
+
+
+def _draw_bounds_frame(image: Image.Image, metadata: dict[str, Any], map_bounds_xy: dict[str, float] | None) -> Image.Image:
+    framed = image.copy().convert("RGB")
+    draw = ImageDraw.Draw(framed)
+    width, height = framed.size
+    border = max(6, int(min(width, height) * 0.004))
+    draw.rectangle((0, 0, width - 1, height - 1), outline=(255, 40, 40), width=border)
+    final = metadata["final_world_bounds_xy"]
+    labels = [
+        (8, height - 28, f"min_x/min_y {final['min_x']:.2f}, {final['min_y']:.2f}"),
+        (8, 8, f"min_x/max_y {final['min_x']:.2f}, {final['max_y']:.2f}"),
+        (max(8, width - 255), height - 28, f"max_x/min_y {final['max_x']:.2f}, {final['min_y']:.2f}"),
+        (max(8, width - 255), 8, f"max_x/max_y {final['max_x']:.2f}, {final['max_y']:.2f}"),
+    ]
+    for x, y, text in labels:
+        draw.rectangle((x - 4, y - 3, x + 250, y + 18), fill=(255, 255, 255))
+        draw.text((x, y), text, fill=(0, 0, 0))
+    if map_bounds_xy is not None:
+        min_u, max_v = world_to_image_uv(metadata, map_bounds_xy["min_x"], map_bounds_xy["min_y"])
+        max_u, min_v = world_to_image_uv(metadata, map_bounds_xy["max_x"], map_bounds_xy["max_y"])
+        draw.rectangle((min_u, min_v, max_u, max_v), outline=(40, 120, 255), width=max(3, border // 2))
+        draw.text((min_u + 6, min_v + 6), "oracle map bounds", fill=(40, 80, 180))
+    return framed
 
 
 def _draw_start_marker(image: Image.Image, metadata: dict[str, Any]) -> Image.Image:
@@ -263,6 +489,7 @@ def run_render(args: argparse.Namespace) -> dict[str, Any]:
     out = ensure_dir(args.out)
     aspect = float(args.render_width) / float(args.render_height)
     start_info = _start_info(args, map_bundle)
+    map_bounds_xy = _map_bounds_xy(meta)
 
     SimulationApp = _import_simulation_app()
     simulation_app = SimulationApp({"headless": bool(args.headless)})
@@ -282,18 +509,36 @@ def run_render(args: argparse.Namespace) -> dict[str, Any]:
         stage = omni.usd.get_context().get_stage()
         bounds_report: dict[str, Any]
         try:
-            bounds, bounds_report = _usd_visible_mesh_world_bounds(
+            bounds, bounds_report = compute_usd_visible_scene_bounds_xy(
                 stage,
                 margin_m=float(args.margin_m),
                 aspect=aspect,
+                map_bounds_xy=map_bounds_xy,
             )
         except Exception as exc:
             bounds = _map_meta_bounds(meta, margin_m=float(args.margin_m), aspect=aspect)
+            fallback_final_xy = _xy_bounds_dict(
+                bounds["bounds_min_xy"][0],
+                bounds["bounds_min_xy"][1],
+                bounds["bounds_max_xy"][0],
+                bounds["bounds_max_xy"][1],
+            )
             bounds_report = {
-                "bounds_source": "map_meta_world_bounds",
+                "bounds_source": "map_meta_fallback",
+                "excluded_prim_count": 0,
                 "fallback_reason": f"{type(exc).__name__}: {exc}",
+                "final_bounds_after_margin": fallback_final_xy,
+                "fit_input_bounds_xy": map_bounds_xy,
+                "included_prim_count": 0,
+                "raw_usd_world_bounds": None,
+                "skipped_reason_counts": {},
+                "top_largest_included_prims_by_xy_area": [],
+                "usd_bounds_vs_map_bounds": None,
+                "z_max": 0.0,
+                "z_min": 0.0,
             }
         transforms = image_world_transforms(bounds, int(args.render_width), int(args.render_height))
+        final_bounds_xy = transforms["world_bounds_xy"]
 
         world = World(stage_units_in_meters=1.0)
         world.reset()
@@ -301,7 +546,16 @@ def run_render(args: argparse.Namespace) -> dict[str, Any]:
             world.play()
 
         center_x, center_y = bounds["center_xy"]
-        camera_height = max(float(args.camera_height), float(bounds_report.get("z_max", 0.0)) + 10.0)
+        span_max = max(float(bounds["span_x"]), float(bounds["span_y"]))
+        z_min = float(bounds_report.get("z_min", 0.0) or 0.0)
+        z_max = float(bounds_report.get("z_max", 0.0) or 0.0)
+        camera_height_arg = str(args.camera_height).strip().lower()
+        if camera_height_arg == "auto":
+            camera_height = z_max + max(20.0, span_max)
+        else:
+            camera_height = float(args.camera_height)
+            if camera_height <= z_max:
+                raise ValueError(f"--camera-height must be above scene z_max={z_max:.3f}, got {camera_height:.3f}")
         camera_prim_path = "/World/ManualAnnotationBaseCamera"
         camera = Camera(
             prim_path=camera_prim_path,
@@ -313,7 +567,15 @@ def run_render(args: argparse.Namespace) -> dict[str, Any]:
             camera.initialize(attach_rgb_annotator=False)
         except TypeError:
             camera.initialize()
-        camera_info = _configure_camera(stage, camera_prim_path, bounds["span_x"], bounds["span_y"], camera_height)
+        camera_info = _configure_camera(
+            stage,
+            camera_prim_path,
+            bounds["span_x"],
+            bounds["span_y"],
+            camera_height,
+            z_min,
+            strict_orthographic=bool(args.strict_orthographic),
+        )
         annotator = _create_rgb_annotator(camera.get_render_product_path())
         for _ in range(8):
             world.step(render=False)
@@ -322,8 +584,11 @@ def run_render(args: argparse.Namespace) -> dict[str, Any]:
 
         clean_path = out / "full_scene_topdown_clean.png"
         with_start_path = out / "full_scene_topdown_with_start.png"
+        bounds_frame_path = out / "full_scene_topdown_with_bounds_frame.png"
         metadata_path = out / "full_scene_topdown_metadata.json"
-        render_report_path = out / "render_report.json"
+        bounds_debug_path = out / "full_scene_topdown_bounds_debug.json"
+        render_report_path = out / "full_scene_topdown_render_report.json"
+        legacy_render_report_path = out / "render_report.json"
         Image.fromarray(rgb).save(clean_path)
 
         cam_pos, cam_quat = camera.get_world_pose()
@@ -342,11 +607,16 @@ def run_render(args: argparse.Namespace) -> dict[str, Any]:
             "coordinate_convention": COORDINATE_CONVENTION,
             "bounds_source": bounds_report["bounds_source"],
             "bounds_report": bounds_report,
+            "excluded_prim_count": int(bounds_report.get("excluded_prim_count", 0)),
+            "final_world_bounds_xy": final_bounds_xy,
             "full_scene": bool(args.full_scene),
+            "included_prim_count": int(bounds_report.get("included_prim_count", 0)),
+            "included_prim_method_counts": bounds_report.get("included_prim_method_counts", {}),
             "image_type": "full_scene_topdown_clean",
             "image_to_world": transforms["image_to_world"],
             "image_to_world_transform": transforms["image_to_world_transform"],
             "map_dir": Path(args.map_dir).resolve().as_posix(),
+            "map_bounds_world_xy": map_bounds_xy,
             "margin_m": float(args.margin_m),
             "meters_per_pixel_x": transforms["meters_per_pixel_x"],
             "meters_per_pixel_y": transforms["meters_per_pixel_y"],
@@ -355,20 +625,26 @@ def run_render(args: argparse.Namespace) -> dict[str, Any]:
                 "Clean full-scene top-down base image for manual route annotation.",
                 "The main clean PNG contains no route, no direction indicators, no waypoint overlay, and no start marker.",
                 "Any start marker is written only to the optional overlay PNG; the source USD was not modified or saved.",
+                "Full-scene bounds are computed from adjusted USD visible geometry; map bounds are kept only for comparison, containment, or fallback.",
             ],
             "outputs": {
                 "full_scene_topdown_clean": clean_path.as_posix(),
+                "full_scene_topdown_bounds_debug": bounds_debug_path.as_posix(),
                 "full_scene_topdown_metadata": metadata_path.as_posix(),
+                "full_scene_topdown_render_report": render_report_path.as_posix(),
+                "full_scene_topdown_with_bounds_frame": bounds_frame_path.as_posix(),
                 "full_scene_topdown_with_start": with_start_path.as_posix() if write_start_overlay else None,
-                "render_report": render_report_path.as_posix(),
+                "legacy_render_report": legacy_render_report_path.as_posix(),
             },
             "projection": camera_info["projection"],
             "random_seed": start_info.get("random_seed"),
             "random_start_enabled": bool(start_info.get("random_start_enabled", False)),
             "render_height": int(args.render_height),
             "render_width": int(args.render_width),
+            "raw_usd_world_bounds": bounds_report.get("raw_usd_world_bounds"),
             "scene_id": args.scene_id,
             "scene_usd": scene_usd.as_posix(),
+            "skipped_reason_counts": bounds_report.get("skipped_reason_counts", {}),
             "source_of_truth": meta.get("source_of_truth"),
             "start_clearance_m": start_info.get("clearance_m"),
             "start_pose_source": start_info["start_pose_source"],
@@ -381,24 +657,50 @@ def run_render(args: argparse.Namespace) -> dict[str, Any]:
             "world_to_image": transforms["world_to_image"],
             "world_to_image_transform": transforms["world_to_image_transform"],
         }
+        bounds_debug = {
+            "bounds_source": bounds_report["bounds_source"],
+            "excluded_categories_summary": bounds_report.get("skipped_reason_counts", {}),
+            "final_bounds": final_bounds_xy,
+            "final_bounds_after_margin": bounds_report.get("final_bounds_after_margin", final_bounds_xy),
+            "fit_input_bounds_xy": bounds_report.get("fit_input_bounds_xy"),
+            "included_prim_method_counts": bounds_report.get("included_prim_method_counts", {}),
+            "map_bounds": map_bounds_xy,
+            "margin_m": float(args.margin_m),
+            "raw_bounds": bounds_report.get("raw_usd_world_bounds"),
+            "top_50_largest_included_prims_by_xy_area": bounds_report.get("top_largest_included_prims_by_xy_area", []),
+            "usd_bounds_vs_map_bounds_comparison": bounds_report.get("usd_bounds_vs_map_bounds"),
+        }
+        framed = _draw_bounds_frame(Image.fromarray(rgb).convert("RGB"), metadata, map_bounds_xy)
+        framed.save(bounds_frame_path)
         if write_start_overlay:
             marked = _draw_start_marker(Image.fromarray(rgb).convert("RGB"), metadata)
             marked.save(with_start_path)
         write_json(metadata_path, metadata)
+        write_json(bounds_debug_path, bounds_debug)
+        render_report = {
+            "bounds_debug": bounds_debug_path.as_posix(),
+            "bounds_source": bounds_report["bounds_source"],
+            "clean_png": clean_path.as_posix(),
+            "final_world_bounds_xy": final_bounds_xy,
+            "full_scene_topdown_with_bounds_frame": bounds_frame_path.as_posix(),
+            "included_prim_count": int(bounds_report.get("included_prim_count", 0)),
+            "map_bounds_world_xy": map_bounds_xy,
+            "metadata": metadata_path.as_posix(),
+            "passed": bounds_report["bounds_source"] == "usd_stage_visible_geometry_bounds",
+            "projection": camera_info["projection"],
+            "raw_usd_world_bounds": bounds_report.get("raw_usd_world_bounds"),
+            "render_height": int(args.render_height),
+            "render_width": int(args.render_width),
+            "scene_usd": scene_usd.as_posix(),
+            "with_start_png": with_start_path.as_posix() if write_start_overlay else None,
+        }
+        if bounds_report["bounds_source"] == "map_meta_fallback":
+            render_report["warning"] = "Full-scene USD bounds failed; map metadata fallback was used and QA should fail by default."
         write_json(
             render_report_path,
-            {
-                "bounds_source": bounds_report["bounds_source"],
-                "clean_png": clean_path.as_posix(),
-                "metadata": metadata_path.as_posix(),
-                "passed": True,
-                "projection": camera_info["projection"],
-                "render_height": int(args.render_height),
-                "render_width": int(args.render_width),
-                "scene_usd": scene_usd.as_posix(),
-                "with_start_png": with_start_path.as_posix() if write_start_overlay else None,
-            },
+            render_report,
         )
+        write_json(legacy_render_report_path, render_report)
         return metadata
     except Exception as exc:
         write_json(
