@@ -159,11 +159,12 @@ def _approved_route_metadata(trajectory_path: Path, route_source: str, rows: lis
     rows = rows or []
     approved_route_ids = {str(row.get("approved_route_id")) for row in rows if row.get("approved_route_id")}
     approved_route_id = next(iter(approved_route_ids)) if len(approved_route_ids) == 1 else None
+    is_approved = route_source in {"auto_approved", "auto_exploration_approved"} and bool(approved_route_id)
     result: dict[str, Any] = {
         "approved_route_id": approved_route_id,
-        "route_is_user_approved": route_source == "auto_approved" and bool(approved_route_id),
+        "route_is_user_approved": is_approved,
     }
-    if route_source == "auto_approved":
+    if route_source in {"auto_approved", "auto_exploration_approved"}:
         result["approved_trajectory"] = trajectory_path.as_posix()
     return result
 
@@ -712,7 +713,7 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
             manifest_rows.append(
                 {
                     "base_pose_world": [x, y, yaw],
-                    "approved_route_frame_idx": int(row.get("frame_idx", local_idx)) if route_source == "auto_approved" else None,
+                    "approved_route_frame_idx": int(row.get("frame_idx", local_idx)) if route_source in {"auto_approved", "auto_exploration_approved"} else None,
                     "approved_route_id": row.get("approved_route_id"),
                     "camera_intrinsics": intrinsics,
                     "camera_pose_world": {
@@ -732,7 +733,7 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
                     "nearest_manual_waypoint_idx": row.get("nearest_manual_waypoint_idx"),
                     "pose_annotation_mode": row.get("pose_annotation_mode"),
                     "rgb_path": rgb_rel,
-                    "route_is_user_approved": bool(route_source == "auto_approved" and row.get("approved_route_id")),
+                    "route_is_user_approved": bool(route_source in {"auto_approved", "auto_exploration_approved"} and row.get("approved_route_id")),
                     "route_source": row.get("route_source", route_source),
                     "scene_id": args.scene_id,
                     "timestamp": float(row.get("t", local_idx)),

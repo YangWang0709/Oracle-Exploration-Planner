@@ -25,7 +25,9 @@ Isaac Sim replay is implemented in `scripts/replay_path_collect_rgbd_isaac.py`. 
 
 Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 
-Automatic route candidate generation and user review are implemented with `scripts/generate_oracle_routes.py`, `scripts/qa_oracle_routes.py`, `scripts/review_oracle_routes.py`, `scripts/build_approved_route_trajectory.py`, and `scripts/qa_approved_route_replay.py`. Generated candidates have `route_source=auto_candidate` and cannot enter RGB-D replay until the user approves them into `route_source=auto_approved`.
+Full exploration route candidate generation and user review are implemented with `scripts/generate_exploration_route_candidates.py`, `scripts/qa_exploration_route_candidates.py`, `scripts/review_exploration_route_candidates.py`, `scripts/build_approved_exploration_trajectory.py`, and `scripts/qa_approved_exploration_replay.py`. These candidates have `route_source=auto_exploration_candidate` and cannot enter RGB-D replay until the user approves them into `route_source=auto_exploration_approved`.
+
+The older `scripts/generate_oracle_routes.py` workflow is retained as a point-to-point route library for anchor fragments/codebook work. It is not the main route approval entry point.
 
 Manual route annotation is implemented with `scripts/render_manual_annotation_semantic_floorplan.py`, `scripts/render_manual_annotation_photoreal_topdown_isaac.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. Manual routes are pose routes: every waypoint records adjusted USD world `x`, `y`, and user-annotated `yaw`. Semantic floorplans are best for furniture/category readability, photoreal topdown maps are best for realistic scene appearance review, and geometry footprints are debug-only. The previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
 
@@ -85,7 +87,7 @@ python scripts/plan_oracle_path.py \
   --start auto
 ```
 
-Automatic candidate route generation and review are the current recommended route-audit direction. See `docs/AUTO_ROUTE_GENERATION_AND_REVIEW.md` for regenerated input commands, MVP generation, QA, review, approved trajectory building, and approved replay.
+Automatic full exploration candidate route generation and review are the current recommended route-audit direction. See `docs/EXPLORATION_ROUTE_CANDIDATES.md` for generation, QA, review, approved trajectory building, and approved replay.
 
 Current validated seed 201 historical result:
 
@@ -101,7 +103,7 @@ Current validated seed 201 historical result:
 - No-fill RGB-D smoke test: passed with RGB black-frame ratio `0.0`
 - Automatic path overlay review: deprecated; no longer recommended for route audit
 - Manual route annotation: recommended user route-audit workflow, using semantic floorplan or photoreal orthographic topdown base maps; manual waypoints are `x, y, yaw` poses
-- Auto route generation + user approval: recommended scalable route-audit workflow; approved routes replay with `route_source=auto_approved`
+- Full exploration route candidates + user approval: recommended scalable route-audit workflow; approved routes replay with `route_source=auto_exploration_approved`
 - 100-frame no-fill RGB-D pilot: passed QA with RGB/depth/`distance_to_camera` counts `100 / 100 / 100`
 - `photometric_valid_for_training`: `true`
 - `robot_specific_valid_for_training`: `false` until a real robot USD is available
@@ -183,6 +185,22 @@ Automatic route generation artifacts:
 - `approved_route_trajectory/approved_sparse_waypoints.json`
 - `approved_route_trajectory/approved_actions.jsonl`
 - `approved_route_trajectory/approved_trajectory_stats.json`
+
+Exploration route candidate artifacts:
+
+- `exploration_route_candidates/exploration_routes.jsonl`
+- `exploration_route_candidates/rejected_exploration_routes.jsonl`
+- `exploration_route_candidates/coverage_targets.json`
+- `exploration_route_candidates/exploration_routes_summary.json`
+- `exploration_route_candidates/exploration_routes_qa.json`
+- `exploration_route_candidates/candidate_overview_contact_sheet.png`
+- `exploration_route_candidates/candidate_previews/candidate_*.png`
+- `exploration_route_review/approved_exploration_routes.jsonl`
+- `exploration_route_review/rejected_exploration_routes.jsonl`
+- `approved_exploration_trajectory/approved_exploration_dense_trajectory.jsonl`
+- `approved_exploration_trajectory/approved_exploration_sparse_waypoints.json`
+- `approved_exploration_trajectory/approved_exploration_actions.jsonl`
+- `approved_exploration_trajectory/approved_exploration_trajectory_stats.json`
 
 Manual annotation artifacts:
 

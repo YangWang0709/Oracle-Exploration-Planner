@@ -1,8 +1,10 @@
-# Auto Route Generation And Review
+# Point-To-Point Route Library
 
 ## Purpose
 
-The current route-audit direction is automatic oracle route candidate generation followed by user approval. Generated routes are not final training data. A route becomes replayable only after a human approves it or edits it into an approved route.
+`scripts/generate_oracle_routes.py` generates a point-to-point route library. This is useful for local route fragments and later anchor/codebook work, but it is not the primary user-facing route approval workflow.
+
+For coherent complete exploration routes, use `docs/EXPLORATION_ROUTE_CANDIDATES.md` and `scripts/generate_exploration_route_candidates.py`.
 
 The source of truth for seed 201 remains the adjusted USD:
 
@@ -52,7 +54,7 @@ Regenerate these local ignored outputs before generating routes if `outputs/` wa
   --strict-orthographic
 ```
 
-## Generate Candidates
+## Generate Point-To-Point Routes
 
 Run the MVP first:
 
@@ -101,9 +103,9 @@ Rejected generated candidates go to `rejected_routes.jsonl`. They are useful for
 
 `oracle_route_fragments.jsonl` contains short route fragments for later anchor codebook work. Each fragment has a start pose, egocentric endpoint, horizon, route id, and local waypoint sequence.
 
-The main review image is:
+Do not use the 500-route overview as the main human approval image. It overlays many local routes and can look like route soup. The user approval entry point is:
 
-`outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_routes_mvp/route_candidate_overview.png`
+`outputs/exploration_dataset/seed_201_adjusted_usd_test/exploration_route_candidates/candidate_overview_contact_sheet.png`
 
 Individual samples are in:
 
@@ -111,7 +113,7 @@ Individual samples are in:
 
 ## Review
 
-Approve or reject candidates:
+Point-to-point review is retained for debugging/local library inspection only:
 
 ```bash
 python scripts/review_oracle_routes.py \
@@ -131,7 +133,7 @@ Controls:
 - `s`: save
 - `q`: quit
 
-Approved rows are written to `approved_routes.jsonl` with `route_source=auto_approved` and `route_is_user_approved=true`.
+Approved point-to-point rows are written to `approved_routes.jsonl` with `route_source=auto_approved` and `route_is_user_approved=true`, but full exploration approval should use `approved_exploration_routes.jsonl`.
 
 ## Approved Route To Replay
 
