@@ -1,10 +1,12 @@
 # Manual Route Annotation
 
-## Why Manual Routes
+## Role
+
+Manual routes remain available for hand-authored routes and for editing or replacing generated candidates. The scalable default direction is now automatic route candidate generation followed by user approval; see `docs/AUTO_ROUTE_GENERATION_AND_REVIEW.md`.
 
 The old automatic path overlay review has been deprecated. The 1000-point path markers plus direction indicators were too dense for route review, so they are no longer the recommended user-facing route audit workflow.
 
-The automatic `trajectory_usd_blender` output can still be used as a reference trajectory, but it must not be used as the data source after the user has annotated a route. User-approved RGB-D replay must follow `manual_trajectory/manual_dense_trajectory.jsonl`.
+The automatic `trajectory_usd_blender` output can still be used as a reference trajectory, but it must not be used as the data source after the user has annotated or approved a route. User-authored RGB-D replay must follow `manual_trajectory/manual_dense_trajectory.jsonl`; auto-approved replay must follow `approved_route_trajectory/approved_dense_trajectory.jsonl`.
 
 ## Source Of Truth
 
