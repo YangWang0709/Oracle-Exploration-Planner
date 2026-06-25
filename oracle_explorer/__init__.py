@@ -5,9 +5,11 @@ __all__ = [
     "debug_viz",
     "io_utils",
     "mapping",
+    "manual_route",
     "metadata_parser",
     "object_classification",
     "planning",
     "qa",
+    "start_sampling",
     "trajectory",
 ]

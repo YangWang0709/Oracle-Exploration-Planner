@@ -25,7 +25,7 @@ Isaac Sim replay is implemented in `scripts/replay_path_collect_rgbd_isaac.py`. 
 
 Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 
-Isaac top-down path review is implemented in `scripts/render_path_review_topdown_isaac.py`, with QA in `scripts/qa_path_review.py`. It loads the adjusted USD, creates runtime-only path overlay prims, and writes review images plus metadata under `outputs/`.
+Manual route annotation is implemented with `scripts/render_manual_annotation_base_topdown_isaac.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. The previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
 
 The current photometric validation scene is seed 201, documented in
 `docs/SEED_201_USD_SOURCE_OF_TRUTH.md` and `docs/SEED_201_ADJUSTED_RESULTS.md`.
@@ -95,7 +95,8 @@ Current validated seed 201 result:
 - Dense frames: `6526`
 - Final coverage: `0.9808366046177873`
 - No-fill RGB-D smoke test: passed with RGB black-frame ratio `0.0`
-- Isaac top-down path review: passed QA, main PNG at `outputs/exploration_dataset/seed_201_adjusted_usd_test/path_review/topdown_path_review.png`
+- Automatic path overlay review: deprecated; no longer recommended for route audit
+- Manual route annotation: recommended user route-audit workflow
 - 100-frame no-fill RGB-D pilot: passed QA with RGB/depth/`distance_to_camera` counts `100 / 100 / 100`
 - `photometric_valid_for_training`: `true`
 - `robot_specific_valid_for_training`: `false` until a real robot USD is available
@@ -157,13 +158,22 @@ Trajectory artifacts:
 - `debug_topdown_path.png`
 - `debug_coverage_progress.png`
 
-Path-review artifacts:
+Manual annotation artifacts:
 
-- `topdown_path_review.png`
-- `topdown_path_review_no_overlay.png`
-- `topdown_path_review_overlay.png`
-- `topdown_path_review_metadata.json`
-- `path_review_qa.json`
+- `manual_annotation/topdown_base.png`
+- `manual_annotation/topdown_base_clean.png`
+- `manual_annotation/topdown_base_with_start.png`
+- `manual_annotation/topdown_base_metadata.json`
+- `manual_route/manual_waypoints_image.json`
+- `manual_route/manual_waypoints_world.json`
+- `manual_route/manual_route_preview.png`
+- `manual_route/manual_route_metadata.json`
+- `manual_trajectory/manual_dense_trajectory.jsonl`
+- `manual_trajectory/manual_sparse_waypoints.json`
+- `manual_trajectory/manual_actions.jsonl`
+- `manual_trajectory/manual_trajectory_stats.json`
+- `manual_trajectory/manual_trajectory_preview.png`
+- `manual_route/manual_route_qa.json`
 
 Generated map, path, image, video, USD, blend, RGB-D, `.npy`, and dataset artifacts remain under `outputs/` or the external Infinigen tree and are not committed. Durable result summaries should be written into docs.
 
@@ -292,22 +302,50 @@ Seed 201 100-frame pilot command:
 
 This seed 201 pilot used no runtime fill light and wrote `photometric_valid_for_training=true`, `robot_specific_valid_for_training=false`, and `used_xform_fallback=true`.
 
-## Isaac Path Review
+## Manual Route Annotation
 
-Use the same adjusted USD and trajectory for path review:
+Use the same adjusted USD-derived map to render a clean top-down base image:
 
 ```bash
-/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/render_path_review_topdown_isaac.py \
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/render_manual_annotation_base_topdown_isaac.py \
   --scene-id "seed_201_adjusted_usd_test" \
   --scene-usd "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc" \
-  --trajectory "outputs/exploration_dataset/seed_201_adjusted_usd_test/trajectory_usd_blender/dense_trajectory.jsonl" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
-  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/path_review" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation" \
   --headless \
-  --max-points 1000 \
-  --path-sample-stride 5 \
-  --render-width 1600 \
-  --render-height 1600
+  --render-width 1800 \
+  --render-height 1800 \
+  --random-start \
+  --random-seed 0 \
+  --min-start-clearance-m 0.30 \
+  --show-start-marker
 ```
 
-The path review is for human audit of the oracle path inside the adjusted scene. It creates the overlay only at runtime and does not modify or save the source USD. MP4 output was not implemented in this pass; the static top-down PNG review was generated and passed QA.
+Then let the user click route waypoints:
+
+```bash
+python scripts/manual_route_annotator.py \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base_metadata.json" \
+  --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
+```
+
+Build and QA the manual trajectory:
+
+```bash
+python scripts/build_manual_trajectory.py \
+  --manual-waypoints "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route/manual_waypoints_world.json" \
+  --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory" \
+  --step-size 0.25 \
+  --snap-to-traversable \
+  --connect-with-astar
+
+python scripts/qa_manual_route.py \
+  --manual-route-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
+  --manual-trajectory-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory" \
+  --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender"
+```
+
+The manual route starts at a reproducible random legal start pose sampled from the adjusted USD-derived reachable/traversable map. `--random-seed` controls reproducibility, and the metadata records the sampled start pose. The automatic 6526-frame trajectory remains useful as a reference, but it is no longer the primary route-review interface.

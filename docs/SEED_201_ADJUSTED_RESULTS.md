@@ -42,22 +42,29 @@ The USD was imported into an empty Blender scene with `bpy.ops.wm.usd_import`. `
 
 The planned path is nonempty, stays on traversable/reachable cells, and meets the requested coverage threshold.
 
-## Isaac Top-Down Path Review
+## Manual Route Annotation
 
-- Output directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/path_review`
-- Main PNG: `outputs/exploration_dataset/seed_201_adjusted_usd_test/path_review/topdown_path_review.png`
+The old automatic top-down path overlay has been deprecated because it was too cluttered for route review. It should not be the primary route-audit interface.
+
+The replacement flow is:
+
+- Render a clean top-down base image from the adjusted USD.
+- Randomly initialize a legal start pose from the adjusted USD-derived reachable/traversable map.
+- Let the user click route waypoints manually.
+- Convert the clicked points to adjusted USD world coordinates.
+- Use A* only to connect adjacent manual waypoints.
+- Replay `manual_trajectory/manual_dense_trajectory.jsonl` after manual route QA passes.
+
+Manual annotation outputs:
+
+- Base image directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation`
+- Manual route directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route`
+- Manual trajectory directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory`
+- Start pose: random by default, reproducible with `--random-seed`
 - Source of truth: `usd`
 - Used blend: `false`
-- Camera projection: `orthographic`
-- Overlay point count: `1000`
-- Sparse waypoint count: `62`
-- Heading arrow count: `66`
-- Start marker: `true`
-- End marker: `true`
-- MP4 generated: `false`
-- QA: passed
 
-The path review loads the adjusted USD in Isaac Sim and creates runtime-only overlay prims under `/World/OraclePathReview`. It does not modify or save the source USD. The PNG and metadata are ignored output artifacts and are not committed.
+The automatic `trajectory_usd_blender` route remains available as a reference route, but the user-approved route should come from manual annotation.
 
 ## Sensor Smoke Test
 
@@ -112,4 +119,4 @@ Interpretation: seed 201 fixes the seed 16 photometric problem for no-fill RGB-D
 
 ## Recommendation
 
-Review the Isaac top-down path image before scaling collection. If the path is reasonable in the adjusted scene, proceed to a 500-frame or full 6526-frame no-fill photometric replay with the same adjusted USD. Keep all Xform-fallback runs labeled as photometric validation only unless a real robot USD is provided or installed first.
+Use manual route annotation for route review. After the user saves waypoints and `qa_manual_route.py` passes, proceed to a 10-frame manual-route replay smoke test, then a 500-frame or longer no-fill photometric replay with the same adjusted USD. Keep all Xform-fallback runs labeled as photometric validation only unless a real robot USD is provided or installed first.

@@ -93,6 +93,15 @@ def load_trajectory(path: str | Path, max_frames: int | None = None) -> list[dic
     return rows
 
 
+def infer_route_source(rows: list[dict[str, Any]]) -> str:
+    sources = {str(row.get("route_source")) for row in rows if row.get("route_source")}
+    if len(sources) == 1:
+        return next(iter(sources))
+    if len(sources) > 1:
+        return "mixed"
+    return "oracle"
+
+
 def output_paths(out_root: str | Path) -> dict[str, Path]:
     out = ensure_dir(out_root)
     return {
@@ -116,6 +125,7 @@ def run_dry_run(args: argparse.Namespace) -> dict[str, Any]:
     if not trajectory_path.exists():
         raise FileNotFoundError(f"Trajectory file does not exist: {trajectory_path}")
     rows = load_trajectory(trajectory_path, args.max_frames)
+    route_source = infer_route_source(rows)
     paths = output_paths(Path(args.out).resolve())
     report = {
         "add_camera_fill_light": bool(args.add_camera_fill_light),
@@ -137,6 +147,7 @@ def run_dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "resolved_scene_usd": scene_path.as_posix(),
         "robot": args.robot,
         "robot_usd": args.robot_usd,
+        "route_source": route_source,
         "scene_id": args.scene_id,
         "scene_usd": scene_path.as_posix(),
         "selected_by": scene_info["selected_by"],
@@ -536,6 +547,7 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
     )
     trajectory_path = Path(args.trajectory).resolve()
     rows = load_trajectory(trajectory_path, args.max_frames)
+    route_source = infer_route_source(rows)
     paths = output_paths(Path(args.out).resolve())
 
     simulation_app = SimulationApp({"headless": bool(args.headless)})
@@ -642,6 +654,7 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
                     "oracle_action": row.get("discrete_action"),
                     "oracle_next_waypoint": row.get("next_waypoint"),
                     "rgb_path": rgb_rel,
+                    "route_source": row.get("route_source", route_source),
                     "scene_id": args.scene_id,
                     "timestamp": float(row.get("t", local_idx)),
                 }
@@ -698,6 +711,7 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
             "robot_asset_source": robot_asset_source,
             "robot_specific_valid_for_training": robot_specific_valid_for_training,
             "robot_warning": robot_warning,
+            "route_source": route_source,
             "rgb_black_frame_count": rgb_black_frames,
             "rgb_black_frame_ratio": black_ratio,
             "rgb_mean_brightness": brightness_stats,
