@@ -61,4 +61,6 @@ Photometric validation passed for the adjusted seed 201 USD. Robot-specific vali
 - `used_xform_fallback`: `true`
 - QA passed: `true`
 
-The 100-frame pilot confirms that the adjusted seed 201 USD supports no-fill photometric RGB-D replay for this trajectory prefix. It remains a photometric and sensor-chain pilot only, because the camera rig is the explicit Xform fallback rather than a real robot USD.
+The 100-frame pilot confirms that the adjusted seed 201 USD supports no-fill photometric RGB-D replay for this trajectory prefix. It remains a historical photometric and sensor-chain pilot only, because it used the automatic coverage trajectory and the explicit Xform fallback rather than a user-annotated route with a real robot USD.
+
+For current user-annotated route data, follow `docs/MANUAL_ROUTE_ANNOTATION.md`: build `manual_trajectory/manual_dense_trajectory.jsonl`, replay that trajectory, and require replay metadata with `route_source=manual`.

@@ -31,7 +31,7 @@ The critical correction for this run is that the user edits live in the USD/USDC
 
 The USD was imported into an empty Blender scene with `bpy.ops.wm.usd_import`. `coarse/scene.blend` was not opened or used.
 
-## Path Result
+## Automatic Path Result
 
 - Trajectory output: `outputs/exploration_dataset/seed_201_adjusted_usd_test/trajectory_usd_blender`
 - Sparse waypoints: `62`
@@ -40,7 +40,7 @@ The USD was imported into an empty Blender scene with `bpy.ops.wm.usd_import`. `
 - Coverage threshold: `0.98`
 - Path QA: passed
 
-The planned path is nonempty, stays on traversable/reachable cells, and meets the requested coverage threshold.
+The planned path is nonempty, stays on traversable/reachable cells, and meets the requested coverage threshold. This automatic trajectory is retained as a coverage reference only; it is not the user-approved route after manual annotation.
 
 ## Manual Route Annotation
 
@@ -58,13 +58,16 @@ The replacement flow is:
 Manual annotation outputs:
 
 - Base image directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation`
+- Clean base image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png`
+- Metadata: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_metadata.json`
+- Optional start reference image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_with_start.png`
 - Manual route directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route`
 - Manual trajectory directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory`
 - Start pose: random by default, reproducible with `--random-seed`
 - Source of truth: `usd`
 - Used blend: `false`
 
-The automatic `trajectory_usd_blender` route remains available as a reference route, but the user-approved route should come from manual annotation.
+The automatic `trajectory_usd_blender` route remains available as a reference route, but the user-approved route must come from manual annotation. Once the user saves waypoints, RGB-D replay must use `manual_trajectory/manual_dense_trajectory.jsonl`; datasets whose metadata is not `route_source=manual` should not be treated as user-annotated route data.
 
 ## Sensor Smoke Test
 
@@ -109,6 +112,8 @@ The automatic `trajectory_usd_blender` route remains available as a reference ro
 - Camera pose changes: `true`
 - Sensor QA: passed
 
+The smoke test and 100-frame pilot above are historical automatic-trajectory sensor checks. They are useful for photometric validation history, but they are not the current manual-route sampling source.
+
 ## Training Validity
 
 - `photometric_valid_for_training`: `true`
@@ -119,4 +124,4 @@ Interpretation: seed 201 fixes the seed 16 photometric problem for no-fill RGB-D
 
 ## Recommendation
 
-Use manual route annotation for route review. After the user saves waypoints and `qa_manual_route.py` passes, proceed to a 10-frame manual-route replay smoke test, then a 500-frame or longer no-fill photometric replay with the same adjusted USD. Keep all Xform-fallback runs labeled as photometric validation only unless a real robot USD is provided or installed first.
+Use manual route annotation for route review. After the user saves waypoints and `qa_manual_route.py` passes, replay `manual_trajectory/manual_dense_trajectory.jsonl`, run `qa_manual_route_replay.py`, then proceed to a 500-frame or longer no-fill photometric replay with the same adjusted USD. Keep all Xform-fallback runs labeled as photometric validation only unless a real robot USD is provided or installed first.

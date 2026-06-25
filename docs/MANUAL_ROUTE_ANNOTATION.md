@@ -4,7 +4,7 @@
 
 The old automatic path overlay review has been deprecated. The 1000-point path markers plus direction indicators were too dense for route review, so they are no longer the recommended user-facing route audit workflow.
 
-The automatic `trajectory_usd_blender` output can still be used as a reference trajectory, but the route that a user approves should now come from manual annotation.
+The automatic `trajectory_usd_blender` output can still be used as a reference trajectory, but it must not be used as the data source after the user has annotated a route. User-approved RGB-D replay must follow `manual_trajectory/manual_dense_trajectory.jsonl`.
 
 ## Source Of Truth
 
@@ -17,13 +17,13 @@ The clean top-down render, manual annotation, manual trajectory builder, and rep
 
 ## Workflow
 
-1. Render a clean top-down base image from the adjusted USD.
+1. Render a clean full-scene top-down base image from the adjusted USD.
 2. Randomly initialize a legal robot start pose from the reachable/traversable map.
 3. User manually clicks route waypoints on the base image.
 4. Convert clicked image coordinates to adjusted USD world coordinates.
 5. Use A* only to connect adjacent user waypoints through traversable space.
 6. Generate `manual_dense_trajectory.jsonl`.
-7. Replay RGB-D using the manual trajectory.
+7. Replay RGB-D using the manual trajectory only.
 
 The default start pose is random but reproducible with `--random-seed`. It is sampled from cells that are in bounds, reachable, traversable, outside occupied/inflated obstacles, and satisfy the requested clearance.
 
@@ -38,27 +38,36 @@ Render the base image:
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation" \
   --headless \
-  --render-width 1800 \
-  --render-height 1800 \
-  --random-start \
+  --render-width 3000 \
+  --render-height 3000 \
+  --full-scene \
+  --margin-m 1.0 \
   --random-seed 0 \
-  --min-start-clearance-m 0.30 \
-  --show-start-marker
+  --random-start
 ```
 
 Outputs:
 
-- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base.png`
-- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base_clean.png`
-- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base_with_start.png`
-- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base_metadata.json`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_metadata.json`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_with_start.png`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/render_report.json`
+
+The clean PNG is the annotation entry point and contains no route, no direction indicators, no waypoint overlay, and no start marker. The optional start overlay is a separate reference image.
+
+Base map QA:
+
+```bash
+python scripts/qa_manual_base_map.py \
+  --manual-annotation-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation"
+```
 
 Run the annotator:
 
 ```bash
 python scripts/manual_route_annotator.py \
-  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base.png" \
-  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base_metadata.json" \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_metadata.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
 ```
@@ -78,8 +87,8 @@ You can also override the start from the command line:
 
 ```bash
 python scripts/manual_route_annotator.py \
-  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base.png" \
-  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base_metadata.json" \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_metadata.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
   --start 1.0 2.0 0.0
@@ -121,30 +130,37 @@ python scripts/qa_manual_route.py \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender"
 ```
 
-Replay a 10-frame manual-route smoke test after the user has saved a manual route:
+Replay manual-route RGB-D after the user has saved a manual route:
 
 ```bash
 /home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/replay_path_collect_rgbd_isaac.py \
   --scene-id "seed_201_manual_route_test" \
   --scene-usd "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc" \
   --trajectory "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl" \
-  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route_smoke_10" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route_rgbd" \
   --robot none \
   --allow-xform-fallback-robot \
   --camera-width 640 \
   --camera-height 480 \
   --camera-height-m 1.25 \
   --headless \
-  --max-frames 10 \
   --fail-on-black-rgb \
   --min-rgb-mean-brightness 5.0
 ```
 
-Do not run this replay until a user-created manual route exists.
+Do not run this replay until a user-created manual route exists. The replay metadata must contain `route_source=manual` and `route_is_user_annotated=true`; if it does not, the dataset should not be treated as user-annotated route data.
+
+Replay QA:
+
+```bash
+python scripts/qa_manual_route_replay.py \
+  --dataset "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route_rgbd" \
+  --manual-trajectory "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl"
+```
 
 ## Start Pose
 
-`topdown_base_metadata.json` records:
+`full_scene_topdown_metadata.json` records:
 
 - `random_start_enabled`
 - `random_seed`
@@ -153,6 +169,18 @@ Do not run this replay until a user-created manual route exists.
 - `min_start_clearance_m`
 
 The annotator uses this start as waypoint `0`. User clicks become waypoint `1`, `2`, and so on. The saved world waypoint file separates `start_pose_world`, `user_waypoints`, and `full_waypoints`.
+
+## Replay Rule
+
+After manual annotation, sensor sampling must follow:
+
+`outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl`
+
+The automatic coverage trajectory:
+
+`outputs/exploration_dataset/seed_201_adjusted_usd_test/trajectory_usd_blender/dense_trajectory.jsonl`
+
+is reference-only. It is not a valid source for user-annotated RGB-D replay.
 
 ## Limits
 

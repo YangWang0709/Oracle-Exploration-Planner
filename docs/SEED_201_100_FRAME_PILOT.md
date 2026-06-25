@@ -29,10 +29,10 @@ The automatic `trajectory_usd_blender` result remains available as a reference p
 ## Manual Annotation Entry Point
 
 - Base image directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation`
-- Base image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base.png`
-- Clean base image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base_clean.png`
-- Base image with start marker: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base_with_start.png`
-- Metadata: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base_metadata.json`
+- Clean full-scene base image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png`
+- Metadata: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_metadata.json`
+- Optional start reference image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_with_start.png`
+- Base QA: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/manual_base_map_qa.json`
 - Default start: random legal reachable/traversable pose
 - Reproducibility: `--random-seed`
 - Manual route output: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route`
@@ -72,4 +72,4 @@ The run used `--fail-on-black-rgb` and `--min-rgb-mean-brightness 5.0`. No runti
 
 ## Recommendation
 
-Open `topdown_base.png`, accept or override the random start pose, and manually click the route waypoints. After `qa_manual_route.py` passes, use `manual_trajectory/manual_dense_trajectory.jsonl` for a 10-frame replay smoke test, then scale to a 500-frame or longer replay if the manual route looks right. Robot-specific training should still wait for a real robot USD, or for the replay to be rerun with an explicit robot asset.
+Open `full_scene_topdown_clean.png`, accept or override the metadata random start pose, and manually click the route waypoints. After `qa_manual_route.py` passes, use only `manual_trajectory/manual_dense_trajectory.jsonl` for RGB-D replay. The automatic coverage trajectory remains reference-only and must not be used for user-annotated route sampling. Robot-specific training should still wait for a real robot USD, or for the replay to be rerun with an explicit robot asset.

@@ -24,7 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import numpy as np
 from PIL import Image
 
-from oracle_explorer.io_utils import ensure_dir, read_jsonl, write_json, write_jsonl
+from oracle_explorer.io_utils import ensure_dir, read_json, read_jsonl, write_json, write_jsonl
 from oracle_explorer.scene_usd import resolve_scene_usd as resolve_scene_usd_with_info
 
 
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Replay an oracle path and collect RGB-D in Isaac Sim.")
     parser.add_argument("--scene-usd", required=True, help="'auto' or an explicit .usd/.usdc scene path")
     parser.add_argument("--usd-dir", default=None, help="Directory searched when --scene-usd auto is used")
-    parser.add_argument("--trajectory", required=True, help="dense_trajectory.jsonl from plan_oracle_path.py")
+    parser.add_argument("--trajectory", required=True, help="dense_trajectory.jsonl or manual_dense_trajectory.jsonl")
     parser.add_argument("--out", required=True, help="Dataset output root")
     parser.add_argument("--robot", default="auto", help="'auto', 'none', or a robot label")
     parser.add_argument("--robot-usd", default=None, help="Custom robot USD path")
@@ -102,6 +102,36 @@ def infer_route_source(rows: list[dict[str, Any]]) -> str:
     return "oracle"
 
 
+def infer_manual_waypoints_path(trajectory_path: str | Path, route_source: str) -> Path | None:
+    if route_source != "manual":
+        return None
+    path = Path(trajectory_path).resolve()
+    candidates = [
+        path.parent.parent / "manual_route" / "manual_waypoints_world.json",
+        path.parent / "manual_waypoints_world.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    return candidates[0].resolve()
+
+
+def _manual_route_metadata(trajectory_path: Path, route_source: str) -> dict[str, Any]:
+    manual_waypoints_path = infer_manual_waypoints_path(trajectory_path, route_source)
+    result: dict[str, Any] = {
+        "manual_waypoints": manual_waypoints_path.as_posix() if manual_waypoints_path else None,
+        "route_is_user_annotated": route_source == "manual",
+    }
+    if manual_waypoints_path and manual_waypoints_path.exists():
+        try:
+            waypoints = read_json(manual_waypoints_path)
+            result["manual_waypoint_count"] = len(waypoints.get("full_waypoints", [])) if isinstance(waypoints, dict) else None
+            result["manual_user_waypoint_count"] = len(waypoints.get("user_waypoints", [])) if isinstance(waypoints, dict) else None
+        except Exception as exc:
+            result["manual_waypoints_warning"] = f"failed to read manual waypoints: {type(exc).__name__}: {exc}"
+    return result
+
+
 def output_paths(out_root: str | Path) -> dict[str, Path]:
     out = ensure_dir(out_root)
     return {
@@ -126,6 +156,7 @@ def run_dry_run(args: argparse.Namespace) -> dict[str, Any]:
         raise FileNotFoundError(f"Trajectory file does not exist: {trajectory_path}")
     rows = load_trajectory(trajectory_path, args.max_frames)
     route_source = infer_route_source(rows)
+    manual_meta = _manual_route_metadata(trajectory_path, route_source)
     paths = output_paths(Path(args.out).resolve())
     report = {
         "add_camera_fill_light": bool(args.add_camera_fill_light),
@@ -141,6 +172,7 @@ def run_dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "frame_count_checked": len(rows),
         "headless": bool(args.headless),
         "min_rgb_mean_brightness": float(args.min_rgb_mean_brightness),
+        **manual_meta,
         "out": paths["root"].as_posix(),
         "prefer_latest_usd": bool(args.prefer_latest_usd),
         "replay_scene_usd": scene_path.as_posix(),
@@ -155,6 +187,7 @@ def run_dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "trajectory": trajectory_path.as_posix(),
         "usd_candidates": scene_info["usd_candidates"],
         "usd_dir": scene_info["usd_dir"],
+        "used_blend": False,
     }
     write_json(paths["debug"] / "dry_run_report.json", report)
     write_json(paths["metadata"], report)
@@ -548,6 +581,7 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
     trajectory_path = Path(args.trajectory).resolve()
     rows = load_trajectory(trajectory_path, args.max_frames)
     route_source = infer_route_source(rows)
+    manual_meta = _manual_route_metadata(trajectory_path, route_source)
     paths = output_paths(Path(args.out).resolve())
 
     simulation_app = SimulationApp({"headless": bool(args.headless)})
@@ -651,6 +685,7 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
                     "depth_path": depth_rel,
                     "distance_to_camera_path": distance_rel,
                     "frame_idx": int(row.get("frame_idx", local_idx)),
+                    "manual_route_frame_idx": int(row.get("frame_idx", local_idx)) if route_source == "manual" else None,
                     "oracle_action": row.get("discrete_action"),
                     "oracle_next_waypoint": row.get("next_waypoint"),
                     "rgb_path": rgb_rel,
@@ -702,6 +737,7 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
             "dry_run": False,
             "frame_count": frame_count,
             "min_rgb_mean_brightness": float(args.min_rgb_mean_brightness),
+            **manual_meta,
             "notes": notes,
             "photometric_valid_for_training": photometric_valid_for_training,
             "prefer_latest_usd": bool(args.prefer_latest_usd),
@@ -726,6 +762,7 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
             "trajectory": trajectory_path.as_posix(),
             "usd_candidates": scene_info["usd_candidates"],
             "usd_dir": scene_info["usd_dir"],
+            "used_blend": False,
             "used_xform_fallback": used_xform_fallback,
         }
         write_json(paths["metadata"], metadata)

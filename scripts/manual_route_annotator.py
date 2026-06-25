@@ -168,6 +168,11 @@ def main() -> None:
     def on_motion(event: Any) -> None:
         if event.inaxes == ax and event.xdata is not None and event.ydata is not None:
             state["last_cursor"] = (float(event.xdata), float(event.ydata))
+            from oracle_explorer.manual_route import image_to_world_xy
+
+            x, y = image_to_world_xy(metadata, float(event.xdata), float(event.ydata))
+            ax.set_title(f"{HELP}\nworld: x={x:.3f}, y={y:.3f}")
+            fig.canvas.draw_idle()
 
     def on_key(event: Any) -> None:
         key = event.key or ""

@@ -160,10 +160,11 @@ Trajectory artifacts:
 
 Manual annotation artifacts:
 
-- `manual_annotation/topdown_base.png`
-- `manual_annotation/topdown_base_clean.png`
-- `manual_annotation/topdown_base_with_start.png`
-- `manual_annotation/topdown_base_metadata.json`
+- `manual_annotation/full_scene_topdown_clean.png`
+- `manual_annotation/full_scene_topdown_metadata.json`
+- `manual_annotation/full_scene_topdown_with_start.png`
+- `manual_annotation/render_report.json`
+- `manual_annotation/manual_base_map_qa.json`
 - `manual_route/manual_waypoints_image.json`
 - `manual_route/manual_waypoints_world.json`
 - `manual_route/manual_route_preview.png`
@@ -281,7 +282,7 @@ smoke-test dataset must satisfy those metadata flags.
 
 Isaac Core `camera.get_world_pose()` is treated as returning quaternion orientation in `wxyz` order, which is saved directly in `frame_manifest.jsonl`. If a specific Isaac version returns `xyzw`, pass `--camera-quaternion-convention xyzw` to convert manifest output to `wxyz`. Missing depth or distance annotator output is now a hard error rather than silently saving invalid `.npy` files.
 
-Seed 201 100-frame pilot command:
+Historical seed 201 100-frame pilot command:
 
 ```bash
 /home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/replay_path_collect_rgbd_isaac.py \
@@ -300,7 +301,7 @@ Seed 201 100-frame pilot command:
   --min-rgb-mean-brightness 5.0
 ```
 
-This seed 201 pilot used no runtime fill light and wrote `photometric_valid_for_training=true`, `robot_specific_valid_for_training=false`, and `used_xform_fallback=true`.
+This seed 201 pilot used no runtime fill light and wrote `photometric_valid_for_training=true`, `robot_specific_valid_for_training=false`, and `used_xform_fallback=true`. It is a historical photometric sensor-chain check on the automatic coverage trajectory, not the current route-review or user-annotated replay workflow.
 
 ## Manual Route Annotation
 
@@ -313,20 +314,21 @@ Use the same adjusted USD-derived map to render a clean top-down base image:
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation" \
   --headless \
-  --render-width 1800 \
-  --render-height 1800 \
+  --render-width 3000 \
+  --render-height 3000 \
+  --full-scene \
+  --margin-m 1.0 \
   --random-start \
   --random-seed 0 \
-  --min-start-clearance-m 0.30 \
-  --show-start-marker
+  --min-start-clearance-m 0.30
 ```
 
 Then let the user click route waypoints:
 
 ```bash
 python scripts/manual_route_annotator.py \
-  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base.png" \
-  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/topdown_base_metadata.json" \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation/full_scene_topdown_metadata.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
 ```
@@ -348,4 +350,32 @@ python scripts/qa_manual_route.py \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender"
 ```
 
+Replay RGB-D from the user-annotated manual route:
+
+```bash
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/replay_path_collect_rgbd_isaac.py \
+  --scene-id "seed_201_manual_route_test" \
+  --scene-usd "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc" \
+  --trajectory "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route_rgbd" \
+  --robot none \
+  --allow-xform-fallback-robot \
+  --camera-width 640 \
+  --camera-height 480 \
+  --camera-height-m 1.25 \
+  --headless \
+  --fail-on-black-rgb \
+  --min-rgb-mean-brightness 5.0
+```
+
+Replay QA for user-annotated RGB-D data:
+
+```bash
+python scripts/qa_manual_route_replay.py \
+  --dataset "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route_rgbd" \
+  --manual-trajectory "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl"
+```
+
 The manual route starts at a reproducible random legal start pose sampled from the adjusted USD-derived reachable/traversable map. `--random-seed` controls reproducibility, and the metadata records the sampled start pose. The automatic 6526-frame trajectory remains useful as a reference, but it is no longer the primary route-review interface.
+
+After manual annotation, RGB-D replay must use `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl`. The automatic `trajectory_usd_blender/dense_trajectory.jsonl` path is reference-only and must not be used as the data source for user-annotated route sampling.

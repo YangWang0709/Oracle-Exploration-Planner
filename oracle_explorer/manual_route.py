@@ -90,14 +90,26 @@ def image_world_transforms(bounds: dict[str, Any], width: int, height: int) -> d
         [0.0, -1.0 / sy, max_y / sy],
         [0.0, 0.0, 1.0],
     ]
-    return {
+    world_bounds_xy = {
+        "max_x": max_x,
+        "max_y": max_y,
+        "min_x": min_x,
+        "min_y": min_y,
+    }
+    transforms = {
         "coordinate_convention": COORDINATE_CONVENTION,
         "image_height": height,
         "image_to_world": image_to_world,
+        "image_to_world_transform": image_to_world,
         "image_width": width,
+        "meters_per_pixel_x": sx,
+        "meters_per_pixel_y": sy,
         "world_bounds": bounds,
+        "world_bounds_xy": world_bounds_xy,
         "world_to_image": world_to_image,
+        "world_to_image_transform": world_to_image,
     }
+    return transforms
 
 
 def apply_transform(matrix: Sequence[Sequence[float]], a: float, b: float) -> tuple[float, float]:
@@ -109,11 +121,17 @@ def apply_transform(matrix: Sequence[Sequence[float]], a: float, b: float) -> tu
 
 
 def image_to_world_xy(metadata: dict[str, Any], u: float, v: float) -> tuple[float, float]:
-    return apply_transform(metadata["image_to_world"], u, v)
+    matrix = metadata.get("image_to_world_transform") or metadata.get("image_to_world")
+    if matrix is None:
+        raise KeyError("metadata is missing image_to_world_transform")
+    return apply_transform(matrix, u, v)
 
 
 def world_to_image_uv(metadata: dict[str, Any], x: float, y: float) -> tuple[float, float]:
-    return apply_transform(metadata["world_to_image"], x, y)
+    matrix = metadata.get("world_to_image_transform") or metadata.get("world_to_image")
+    if matrix is None:
+        raise KeyError("metadata is missing world_to_image_transform")
+    return apply_transform(matrix, x, y)
 
 
 def image_waypoints_to_world(
