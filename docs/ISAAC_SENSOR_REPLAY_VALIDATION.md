@@ -38,3 +38,27 @@ Robot fallback is explicit. If no real robot USD is available, `--allow-xform-fa
 - `robot_specific_valid_for_training`: `false`
 
 Photometric validation passed for the adjusted seed 201 USD. Robot-specific validation is still pending a real robot USD asset.
+
+## Seed 201 100-Frame Pilot QA
+
+- Dataset: `outputs/exploration_dataset/seed_201_adjusted_usd_test/pilot_100_xform_no_fill`
+- Source of truth: `usd`
+- Replay scene USD: `/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc`
+- Trajectory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/trajectory_usd_blender/dense_trajectory.jsonl`
+- No runtime fill light: yes
+- Xform fallback: yes
+- Expected frames: `100`
+- Manifest/RGB/depth/`distance_to_camera` counts: `100 / 100 / 100 / 100`
+- RGB black-frame ratio: `0.0`
+- RGB mean brightness min/mean/max: `101.6773361545139 / 154.90101840277777 / 185.124873046875`
+- RGB too-dark ratio: `0.0`
+- Depth finite ratio min/mean/max: `0.71875 / 0.9916875 / 1.0`
+- Depth value min/mean/max: `1.3110827207565308 / 4.331576199846735 / 7.410369873046875`
+- Camera quaternion norm min/mean/max: `1.0 / 1.0 / 1.0`
+- Camera pose changes: `true`
+- `photometric_valid_for_training`: `true`
+- `robot_specific_valid_for_training`: `false`
+- `used_xform_fallback`: `true`
+- QA passed: `true`
+
+The 100-frame pilot confirms that the adjusted seed 201 USD supports no-fill photometric RGB-D replay for this trajectory prefix. It remains a photometric and sensor-chain pilot only, because the camera rig is the explicit Xform fallback rather than a real robot USD.

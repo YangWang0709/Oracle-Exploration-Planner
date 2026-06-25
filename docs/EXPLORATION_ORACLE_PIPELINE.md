@@ -25,6 +25,8 @@ Isaac Sim replay is implemented in `scripts/replay_path_collect_rgbd_isaac.py`. 
 
 Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 
+Isaac top-down path review is implemented in `scripts/render_path_review_topdown_isaac.py`, with QA in `scripts/qa_path_review.py`. It loads the adjusted USD, creates runtime-only path overlay prims, and writes review images plus metadata under `outputs/`.
+
 The current photometric validation scene is seed 201, documented in
 `docs/SEED_201_USD_SOURCE_OF_TRUTH.md` and `docs/SEED_201_ADJUSTED_RESULTS.md`.
 Seed 16 is retained as the older problem scene: its RGB replay was too dark for
@@ -93,6 +95,8 @@ Current validated seed 201 result:
 - Dense frames: `6526`
 - Final coverage: `0.9808366046177873`
 - No-fill RGB-D smoke test: passed with RGB black-frame ratio `0.0`
+- Isaac top-down path review: passed QA, main PNG at `outputs/exploration_dataset/seed_201_adjusted_usd_test/path_review/topdown_path_review.png`
+- 100-frame no-fill RGB-D pilot: passed QA with RGB/depth/`distance_to_camera` counts `100 / 100 / 100`
 - `photometric_valid_for_training`: `true`
 - `robot_specific_valid_for_training`: `false` until a real robot USD is available
 
@@ -153,7 +157,15 @@ Trajectory artifacts:
 - `debug_topdown_path.png`
 - `debug_coverage_progress.png`
 
-Generated map, path, image, and dataset artifacts remain under `outputs/` and are not committed. Durable result summaries should be written into docs.
+Path-review artifacts:
+
+- `topdown_path_review.png`
+- `topdown_path_review_no_overlay.png`
+- `topdown_path_review_overlay.png`
+- `topdown_path_review_metadata.json`
+- `path_review_qa.json`
+
+Generated map, path, image, video, USD, blend, RGB-D, `.npy`, and dataset artifacts remain under `outputs/` or the external Infinigen tree and are not committed. Durable result summaries should be written into docs.
 
 ## Isaac Replay
 
@@ -258,3 +270,44 @@ Use `--require-photometric-valid` or `--require-robot-specific-valid` when the
 smoke-test dataset must satisfy those metadata flags.
 
 Isaac Core `camera.get_world_pose()` is treated as returning quaternion orientation in `wxyz` order, which is saved directly in `frame_manifest.jsonl`. If a specific Isaac version returns `xyzw`, pass `--camera-quaternion-convention xyzw` to convert manifest output to `wxyz`. Missing depth or distance annotator output is now a hard error rather than silently saving invalid `.npy` files.
+
+Seed 201 100-frame pilot command:
+
+```bash
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/replay_path_collect_rgbd_isaac.py \
+  --scene-id "seed_201_adjusted_usd_test" \
+  --scene-usd "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc" \
+  --trajectory "outputs/exploration_dataset/seed_201_adjusted_usd_test/trajectory_usd_blender/dense_trajectory.jsonl" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/pilot_100_xform_no_fill" \
+  --robot none \
+  --allow-xform-fallback-robot \
+  --camera-width 640 \
+  --camera-height 480 \
+  --camera-height-m 1.25 \
+  --headless \
+  --max-frames 100 \
+  --fail-on-black-rgb \
+  --min-rgb-mean-brightness 5.0
+```
+
+This seed 201 pilot used no runtime fill light and wrote `photometric_valid_for_training=true`, `robot_specific_valid_for_training=false`, and `used_xform_fallback=true`.
+
+## Isaac Path Review
+
+Use the same adjusted USD and trajectory for path review:
+
+```bash
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/render_path_review_topdown_isaac.py \
+  --scene-id "seed_201_adjusted_usd_test" \
+  --scene-usd "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc" \
+  --trajectory "outputs/exploration_dataset/seed_201_adjusted_usd_test/trajectory_usd_blender/dense_trajectory.jsonl" \
+  --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/path_review" \
+  --headless \
+  --max-points 1000 \
+  --path-sample-stride 5 \
+  --render-width 1600 \
+  --render-height 1600
+```
+
+The path review is for human audit of the oracle path inside the adjusted scene. It creates the overlay only at runtime and does not modify or save the source USD. MP4 output was not implemented in this pass; the static top-down PNG review was generated and passed QA.

@@ -42,6 +42,23 @@ The USD was imported into an empty Blender scene with `bpy.ops.wm.usd_import`. `
 
 The planned path is nonempty, stays on traversable/reachable cells, and meets the requested coverage threshold.
 
+## Isaac Top-Down Path Review
+
+- Output directory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/path_review`
+- Main PNG: `outputs/exploration_dataset/seed_201_adjusted_usd_test/path_review/topdown_path_review.png`
+- Source of truth: `usd`
+- Used blend: `false`
+- Camera projection: `orthographic`
+- Overlay point count: `1000`
+- Sparse waypoint count: `62`
+- Heading arrow count: `66`
+- Start marker: `true`
+- End marker: `true`
+- MP4 generated: `false`
+- QA: passed
+
+The path review loads the adjusted USD in Isaac Sim and creates runtime-only overlay prims under `/World/OraclePathReview`. It does not modify or save the source USD. The PNG and metadata are ignored output artifacts and are not committed.
+
 ## Sensor Smoke Test
 
 - Dataset: `outputs/exploration_dataset/seed_201_adjusted_usd_test/smoke_xform_no_fill`
@@ -63,13 +80,36 @@ The planned path is nonempty, stays on traversable/reachable cells, and meets th
 - Depth finite ratio min/mean/max: `1.0 / 1.0 / 1.0`
 - Depth min/mean/max: `1.3917347192764282 / 4.865150653539303 / 6.828878402709961`
 
+## 100-Frame No-Fill Pilot
+
+- Dataset: `outputs/exploration_dataset/seed_201_adjusted_usd_test/pilot_100_xform_no_fill`
+- Replay scene USD: `/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc`
+- Trajectory: `outputs/exploration_dataset/seed_201_adjusted_usd_test/trajectory_usd_blender/dense_trajectory.jsonl`
+- Frames: `100`
+- Runtime fill light: no
+- `--add-smoke-test-light`: `false`
+- `--add-camera-fill-light`: `false`
+- Manifest frame count: `100`
+- RGB count: `100`
+- Depth count: `100`
+- `distance_to_camera` count: `100`
+- RGB black-frame ratio: `0.0`
+- RGB mean brightness min/mean/max: `101.6773361545139 / 154.90101840277777 / 185.124873046875`
+- RGB too-dark ratio at threshold `5.0`: `0.0`
+- Depth finite ratio min/mean/max: `0.71875 / 0.9916875 / 1.0`
+- Depth min/mean/max: `1.3110827207565308 / 4.331576199846735 / 7.410369873046875`
+- Camera quaternion norm min/mean/max: `1.0 / 1.0 / 1.0`
+- Camera pose changes: `true`
+- Sensor QA: passed
+
 ## Training Validity
 
 - `photometric_valid_for_training`: `true`
 - `robot_specific_valid_for_training`: `false`
+- `used_xform_fallback`: `true`
 
-Interpretation: seed 201 fixes the seed 16 photometric problem for no-fill RGB-D collection when the adjusted USD is used consistently. The current smoke dataset is not final robot-specific training data because no real Carter/Nova/TurtleBot/JetBot USD was found on this machine and the run used the minimal Xform camera rig.
+Interpretation: seed 201 fixes the seed 16 photometric problem for no-fill RGB-D collection when the adjusted USD is used consistently. The 10-frame smoke dataset and 100-frame pilot are not final robot-specific training data because no real Carter/Nova/TurtleBot/JetBot USD was found on this machine and the runs used the minimal Xform camera rig.
 
 ## Recommendation
 
-Proceed to a seed 201 100-frame no-fill photometric pilot using the same adjusted USD and `trajectory_usd_blender`. Keep it labeled as Xform-fallback photometric validation unless a real robot USD is provided or installed first.
+Review the Isaac top-down path image before scaling collection. If the path is reasonable in the adjusted scene, proceed to a 500-frame or full 6526-frame no-fill photometric replay with the same adjusted USD. Keep all Xform-fallback runs labeled as photometric validation only unless a real robot USD is provided or installed first.
