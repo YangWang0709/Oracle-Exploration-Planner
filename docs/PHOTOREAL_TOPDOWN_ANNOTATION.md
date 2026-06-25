@@ -78,6 +78,8 @@ After annotation, build `manual_trajectory/manual_dense_trajectory.jsonl` with `
 
 After annotation, RGB-D replay must use `manual_trajectory/manual_dense_trajectory.jsonl` and metadata must record `route_source=manual`, `route_is_user_annotated=true`, `pose_annotation_mode=position_plus_yaw`, and `uses_manual_yaw=true`.
 
+For multisensor datasets, use `scripts/replay_manual_route_collect_multisensor_isaac.py` with the same manual trajectory. RGB-D, depth-derived point clouds, TF/odometry, LiDAR availability metadata, and any ROS2/SLAM follow-up must remain aligned to the user-marked waypoint poses and manual yaw. See `docs/MULTISENSOR_AND_ROS2_SLAM.md`.
+
 ## Debugging
 
 If the image appears incomplete, inspect:

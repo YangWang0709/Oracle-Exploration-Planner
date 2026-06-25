@@ -23,6 +23,8 @@ The current non-Isaac foundation contains:
 
 Isaac Sim replay is implemented in `scripts/replay_path_collect_rgbd_isaac.py`. The script supports `--dry-run` with normal Python and imports Isaac Sim packages only when real rendering/collection is requested.
 
+Manual-route multisensor replay is implemented in `scripts/replay_manual_route_collect_multisensor_isaac.py`. It follows `manual_trajectory/manual_dense_trajectory.jsonl`, writes RGB-D plus depth-derived point clouds, TF/static extrinsics, odometry, and LiDAR/LaserScan availability metadata, and is documented in `docs/MULTISENSOR_AND_ROS2_SLAM.md`.
+
 Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 
 Manual route annotation is implemented with `scripts/render_manual_annotation_semantic_floorplan.py`, `scripts/render_manual_annotation_photoreal_topdown_isaac.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. Manual routes are pose routes: every waypoint records adjusted USD world `x`, `y`, and user-annotated `yaw`. Semantic floorplans are best for furniture/category readability, photoreal topdown maps are best for realistic scene appearance review, and geometry footprints are debug-only. The previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
@@ -397,3 +399,33 @@ python scripts/qa_manual_route_replay.py \
 The manual route starts at a reproducible random legal start pose sampled from the adjusted USD-derived reachable/traversable map. `--random-seed` controls reproducibility, and the metadata records the sampled start pose. The automatic 6526-frame trajectory remains useful as a reference, but it is no longer the primary route-review interface.
 
 After manual annotation, RGB-D replay must use `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl`. The automatic `trajectory_usd_blender/dense_trajectory.jsonl` path is reference-only and must not be used as the data source for user-annotated route sampling.
+
+For multisensor replay, use the same manual trajectory:
+
+```bash
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/replay_manual_route_collect_multisensor_isaac.py \
+  --scene-id "seed_201_manual_route_multisensor" \
+  --scene-usd "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc" \
+  --trajectory "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route_multisensor" \
+  --robot none \
+  --allow-xform-fallback-robot \
+  --camera-width 640 \
+  --camera-height 480 \
+  --camera-height-m 1.25 \
+  --enable-rgb \
+  --enable-depth \
+  --enable-depth-pointcloud \
+  --enable-3d-lidar \
+  --enable-2d-laserscan \
+  --headless \
+  --max-frames 50
+```
+
+Then run:
+
+```bash
+python scripts/qa_multisensor_dataset.py \
+  --dataset "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route_multisensor" \
+  --expected-frames 50
+```

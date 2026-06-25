@@ -243,6 +243,27 @@ python scripts/qa_manual_route_replay.py \
   --manual-trajectory "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl"
 ```
 
+Optional multisensor replay uses the same manual trajectory and keeps every sensor frame aligned to `base_pose_world=[x, y, yaw]`:
+
+```bash
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/replay_manual_route_collect_multisensor_isaac.py \
+  --scene-id "seed_201_manual_route_multisensor" \
+  --scene-usd "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc" \
+  --trajectory "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route_multisensor" \
+  --robot none \
+  --allow-xform-fallback-robot \
+  --enable-rgb \
+  --enable-depth \
+  --enable-depth-pointcloud \
+  --enable-3d-lidar \
+  --enable-2d-laserscan \
+  --headless \
+  --max-frames 50
+```
+
+See `docs/MULTISENSOR_AND_ROS2_SLAM.md` for LiDAR availability, ROS2 topic planning, rosbag QA, and 2D SLAM follow-up. The offline multisensor dataset is the primary product; ROS2/rosbag/SLAM are optional integrations.
+
 ## Start Pose
 
 `floorplan_metadata.json` records:
