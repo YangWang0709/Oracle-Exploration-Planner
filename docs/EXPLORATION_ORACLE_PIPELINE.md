@@ -25,7 +25,7 @@ Isaac Sim replay is implemented in `scripts/replay_path_collect_rgbd_isaac.py`. 
 
 Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 
-Manual route annotation is implemented with `scripts/render_manual_annotation_semantic_floorplan.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. The Isaac camera top-down renderer is diagnostic only, and the previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
+Manual route annotation is implemented with `scripts/render_manual_annotation_semantic_floorplan.py`, `scripts/render_manual_annotation_photoreal_topdown_isaac.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. Semantic floorplans are best for furniture/category readability, photoreal topdown maps are best for realistic scene appearance review, and geometry footprints are debug-only. The previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
 
 The current photometric validation scene is seed 201, documented in
 `docs/SEED_201_USD_SOURCE_OF_TRUTH.md` and `docs/SEED_201_ADJUSTED_RESULTS.md`.
@@ -96,7 +96,7 @@ Current validated seed 201 result:
 - Final coverage: `0.9808366046177873`
 - No-fill RGB-D smoke test: passed with RGB black-frame ratio `0.0`
 - Automatic path overlay review: deprecated; no longer recommended for route audit
-- Manual route annotation: recommended user route-audit workflow
+- Manual route annotation: recommended user route-audit workflow, using semantic floorplan or photoreal orthographic topdown base maps
 - 100-frame no-fill RGB-D pilot: passed QA with RGB/depth/`distance_to_camera` counts `100 / 100 / 100`
 - `photometric_valid_for_training`: `true`
 - `robot_specific_valid_for_training`: `false` until a real robot USD is available
@@ -170,6 +170,13 @@ Manual annotation artifacts:
 - `manual_annotation_floorplan_v3/floorplan_unknown_objects.json`
 - `manual_annotation_floorplan_v3/floorplan.svg`
 - `manual_annotation_floorplan_v3/semantic_floorplan_qa.json`
+- `manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png`
+- `manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_start.png`
+- `manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_bounds.png`
+- `manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json`
+- `manual_annotation_photoreal_topdown_v4/photoreal_topdown_camera_debug.json`
+- `manual_annotation_photoreal_topdown_v4/photoreal_topdown_render_report.json`
+- `manual_annotation_photoreal_topdown_v4/photoreal_topdown_qa.json`
 - `manual_route/manual_waypoints_image.json`
 - `manual_route/manual_waypoints_world.json`
 - `manual_route/manual_route_preview.png`

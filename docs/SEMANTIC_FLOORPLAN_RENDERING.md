@@ -4,7 +4,7 @@
 
 The plain USD geometry footprint map makes the room outline visible, but it does not make furniture and major objects clear enough for a human to annotate an exploration route. The semantic floorplan renderer creates a more floor-plan-like base image with walls, rooms, furniture, rugs, plants, fixtures, and main objects drawn as readable 2D symbols.
 
-This is the recommended manual annotation base map for seed 201.
+This is the recommended base map when furniture categories and route planning readability matter most. The photoreal orthographic topdown map in `docs/PHOTOREAL_TOPDOWN_ANNOTATION.md` is a complementary base map for realistic scene appearance review and can also be used directly by the same manual annotator.
 
 ## Source Of Truth
 
@@ -75,6 +75,8 @@ python scripts/manual_route_annotator.py \
 ```
 
 The annotator uses `image_to_world_transform`, `world_to_image_transform`, and `start_pose_world` from `floorplan_metadata.json`.
+
+The same annotator can also use `manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png` with `photoreal_topdown_metadata.json`. Both base-map types preserve the same adjusted USD world XY coordinate convention.
 
 ## Classification Debugging
 

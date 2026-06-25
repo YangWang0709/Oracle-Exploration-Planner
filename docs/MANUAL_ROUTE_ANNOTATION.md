@@ -15,11 +15,17 @@ The automatic `trajectory_usd_blender` output can still be used as a reference t
 
 The semantic floorplan, manual annotation, manual trajectory builder, and replay should all use this same adjusted USD-derived map. Do not use `coarse/scene.blend` for seed 201 manual routes.
 
-The Isaac/Replicator top-down camera render can still be misleading or look like a stale old output, even when USD bounds metadata is correct. A plain footprint map shows room structure but does not make furniture and objects clear enough for route marking. For manual route annotation, the recommended base map is now a semantic USD floorplan generated directly from imported adjusted USD mesh geometry. It does not depend on an Isaac camera, viewport, render product, or orthographic camera behavior.
+There are now three manual annotation base-map choices:
+
+- Semantic floorplan: recommended for seeing furniture categories and planning routes.
+- Photoreal topdown: recommended for auditing real scene appearance and marking routes on a true USD/Isaac render.
+- Geometry footprint: debug only.
+
+The semantic floorplan is generated directly from imported adjusted USD mesh geometry and does not depend on an Isaac camera. The photoreal topdown map uses a high orthographic Isaac/Replicator camera and writes affine image/world transforms for the manual annotator.
 
 ## Workflow
 
-1. Render a clean semantic floorplan from the adjusted USD.
+1. Render a clean semantic floorplan or photoreal orthographic topdown map from the adjusted USD.
 2. Randomly initialize a legal robot start pose from the reachable/traversable map.
 3. User manually clicks route waypoints on the base image.
 4. Convert clicked image coordinates to adjusted USD world coordinates.
@@ -75,12 +81,60 @@ python scripts/qa_semantic_floorplan.py \
   --floorplan-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3"
 ```
 
+Render the photoreal orthographic topdown map:
+
+```bash
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/render_manual_annotation_photoreal_topdown_isaac.py \
+  --scene-id "seed_201_adjusted_usd_test" \
+  --scene-usd "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc" \
+  --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4" \
+  --headless \
+  --render-width 4000 \
+  --render-height 4000 \
+  --margin-m 2.0 \
+  --random-seed 0 \
+  --strict-orthographic
+```
+
+Photoreal outputs:
+
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_start.png`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_bounds.png`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_camera_debug.json`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_render_report.json`
+
+Open the photoreal clean PNG for realistic route annotation:
+
+```bash
+xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png"
+```
+
+Photoreal base map QA:
+
+```bash
+python scripts/qa_photoreal_topdown_base_map.py \
+  --manual-annotation-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4"
+```
+
 Run the annotator:
 
 ```bash
 python scripts/manual_route_annotator.py \
   --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_clean.png" \
   --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_metadata.json" \
+  --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
+```
+
+Or run the same annotator on the photoreal topdown map:
+
+```bash
+python scripts/manual_route_annotator.py \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
 ```
@@ -187,6 +241,17 @@ python scripts/qa_manual_route_replay.py \
 - `final_world_bounds_xy`
 - `floorplan_object_summary.json`
 - `floorplan_unknown_objects.json`
+
+`photoreal_topdown_metadata.json` records the same start pose and affine transforms, plus:
+
+- `base_map_type=photoreal_topdown_orthographic`
+- `render_backend=isaac_replicator_topdown_camera`
+- `projection=orthographic`
+- `bounds_source=usd_stage_visible_geometry_bounds`
+- `camera_height_m`
+- `orthographic_scale`
+- `rgb_brightness`
+- `photometric_valid_for_training`
 
 The annotator uses this start as waypoint `0`. User clicks become waypoint `1`, `2`, and so on. The saved world waypoint file separates `start_pose_world`, `user_waypoints`, and `full_waypoints`.
 
