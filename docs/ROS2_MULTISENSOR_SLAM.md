@@ -29,6 +29,19 @@ Checked from `/home/ubuntu22/Oracle Exploration Planner`.
 - SLAM metadata/dry-run: implemented.
 - 2D SLAM map generation: requires a rosbag with `/scan`, `/tf`, and `/odom`, plus `slam_toolbox`; current environment did not expose `slam_toolbox`.
 
+## Manual Route Dependency
+
+ROS2, rosbag, and SLAM are downstream of the manual route. The current workflow is:
+
+1. Open `manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_start.png`.
+2. Use `scripts/annotate_manual_route_from_topdown.py` to click human waypoints.
+3. Save `manual_trajectory/manual_route.json`.
+4. Run `scripts/build_manual_trajectory.py --input ...manual_route.json --output ...manual_dense_trajectory.jsonl`.
+5. Run `scripts/qa_manual_route.py --route ... --dense ...`.
+6. Only then run multisensor replay, ROS2 replay planning, rosbag recording, or SLAM.
+
+No automatic route planner is part of this flow. If `manual_dense_trajectory.jsonl` is missing, do not run multisensor, ROS2, rosbag, or SLAM commands and do not fabricate a route.
+
 ## Setup Templates
 
 For system ROS2:

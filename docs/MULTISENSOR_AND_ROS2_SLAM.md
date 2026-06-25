@@ -8,9 +8,61 @@ All multisensor replay follows the user-authored manual trajectory:
 
 Do not use `trajectory_usd_blender/dense_trajectory.jsonl` as the data source for user-annotated sensor sampling. Metadata must retain `route_source=manual`, `route_is_user_annotated=true`, `pose_annotation_mode=position_plus_yaw`, and `uses_manual_yaw=true`.
 
+The route is created by human clicks on a topdown image. Do not restore automatic route generation, automatic route review, A*, RRT, PRM, frontier, or graph-search route planning for this workflow.
+
+## Manual Topdown Route
+
+Preferred base image:
+
+`outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_start.png`
+
+Create `manual_route.json` interactively:
+
+```bash
+python scripts/annotate_manual_route_from_topdown.py \
+  --image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_start.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --floorplan-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_metadata.json" \
+  --bounds "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_bounds_debug.json" \
+  --output "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_route.json"
+```
+
+Controls: left click waypoints, `u` undo, `c` clear, `enter` save, `q`/`escape` quit without saving. The script also writes `manual_route_overlay.png`.
+
+Headless smoke/fallback:
+
+```bash
+python scripts/annotate_manual_route_from_topdown.py \
+  --image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_start.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --output "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_route.json" \
+  --points "120,330;200,330;300,280"
+```
+
+Build the dense trajectory by linear interpolation between human-clicked waypoints:
+
+```bash
+python scripts/build_manual_trajectory.py \
+  --input "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_route.json" \
+  --output "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl" \
+  --step-size 0.25
+```
+
+QA:
+
+```bash
+python scripts/qa_manual_route.py \
+  --route "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_route.json" \
+  --dense "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl"
+```
+
+If `manual_route.json` says `coordinate_frame=pixel` or `world_conversion_status=unavailable`, do not run Isaac replay. Fix the pixel-to-world metadata first.
+
 ## Offline Multisensor Replay
 
 The offline dataset is the primary output. It extends the RGB-D replay with depth-derived point clouds, TF/static extrinsics, odometry, and LiDAR/LaserScan availability metadata.
+
+Do not run this until `manual_dense_trajectory.jsonl` exists and manual route QA passes.
 
 ```bash
 /home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/replay_manual_route_collect_multisensor_isaac.py \

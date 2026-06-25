@@ -37,6 +37,44 @@ The semantic floorplan is generated directly from imported adjusted USD mesh geo
 
 The default start pose is random but reproducible with `--random-seed`. It is sampled from cells that are in bounds, reachable, traversable, outside occupied/inflated obstacles, and satisfy the requested clearance.
 
+## Photoreal Topdown Click Helper
+
+For the current seed 201 workflow, the simplest route entry point is the Sim photoreal topdown image with the start marker:
+
+`outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_start.png`
+
+Run:
+
+```bash
+python scripts/annotate_manual_route_from_topdown.py \
+  --image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_start.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --floorplan-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_metadata.json" \
+  --bounds "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_bounds_debug.json" \
+  --output "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_route.json"
+```
+
+This helper records human-clicked waypoints in `manual_route.json` and writes `manual_route_overlay.png` for review. It uses pixel-to-world transforms from the topdown metadata. If conversion is unavailable, QA fails and the route must not be used for Isaac replay.
+
+Build the dense trajectory without automatic route planning:
+
+```bash
+python scripts/build_manual_trajectory.py \
+  --input "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_route.json" \
+  --output "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl" \
+  --step-size 0.25
+```
+
+QA:
+
+```bash
+python scripts/qa_manual_route.py \
+  --route "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_route.json" \
+  --dense "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_dense_trajectory.jsonl"
+```
+
+Do not run RGB-D, multisensor, ROS2, rosbag, or SLAM commands until `manual_dense_trajectory.jsonl` exists and this QA passes. Do not fabricate route points.
+
 ## Seed 201 Commands
 
 Render the semantic floorplan:
