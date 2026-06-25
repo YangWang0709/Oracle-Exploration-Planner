@@ -14,19 +14,25 @@ def _manual_rows() -> list[dict]:
             "base_pose_world": [1.0, 2.0, 0.0],
             "discrete_action": "move_forward",
             "frame_idx": 0,
+            "nearest_manual_waypoint_idx": 0,
             "next_waypoint": [2.0, 2.0, 0.0],
+            "pose_annotation_mode": "position_plus_yaw",
             "route_source": "manual",
             "t": 0.0,
             "velocity_cmd": [0.25, 0.0],
+            "yaw_source": "manual_keyframe",
         },
         {
             "base_pose_world": [2.0, 2.0, 0.0],
             "discrete_action": "stop",
             "frame_idx": 1,
+            "nearest_manual_waypoint_idx": 1,
             "next_waypoint": [2.0, 2.0, 0.0],
+            "pose_annotation_mode": "position_plus_yaw",
             "route_source": "manual",
             "t": 1.0,
             "velocity_cmd": [0.0, 0.0],
+            "yaw_source": "manual_keyframe",
         },
     ]
 
@@ -42,15 +48,19 @@ def _write_manual_tree(tmp_path: Path) -> tuple[Path, Path]:
     write_json(
         manual_waypoints,
         {
+            "all_user_waypoints_have_yaw": True,
             "full_waypoints": [
-                {"idx": 0, "kind": "start", "x": 1.0, "y": 2.0, "yaw": 0.0},
-                {"idx": 1, "kind": "manual", "x": 2.0, "y": 2.0, "yaw": 0.0},
+                {"idx": 0, "kind": "start", "x": 1.0, "y": 2.0, "yaw": 0.0, "yaw_source": "random_start"},
+                {"idx": 1, "kind": "manual", "x": 2.0, "y": 2.0, "yaw": 0.0, "yaw_source": "manual_heading_click"},
             ],
+            "pose_annotation_mode": "position_plus_yaw",
             "random_seed": 0,
+            "requires_heading_click": True,
             "route_source": "manual",
             "start_pose_source": "random_reachable_traversable",
             "start_pose_world": [1.0, 2.0, 0.0],
-            "user_waypoints": [{"idx": 1, "kind": "manual", "x": 2.0, "y": 2.0, "yaw": 0.0}],
+            "user_waypoints": [{"idx": 1, "kind": "manual", "x": 2.0, "y": 2.0, "yaw": 0.0, "yaw_source": "manual_heading_click"}],
+            "yaw_convention": "radians, world XY, 0 along +X, positive CCW",
         },
     )
     write_jsonl(manual_trajectory, _manual_rows())
@@ -91,6 +101,8 @@ def test_replay_dry_run_metadata_records_manual_route(tmp_path: Path) -> None:
     assert metadata["route_is_user_annotated"] is True
     assert Path(metadata["manual_waypoints"]).resolve() == manual_waypoints.resolve()
     assert Path(metadata["trajectory"]).resolve() == manual_trajectory.resolve()
+    assert metadata["pose_annotation_mode"] == "position_plus_yaw"
+    assert metadata["uses_manual_yaw"] is True
     assert metadata["used_blend"] is False
 
 
@@ -112,12 +124,14 @@ def _write_replay_dataset(root: Path, manual_trajectory: Path, manual_waypoints:
         {
             "photometric_valid_for_training": True,
             "manual_waypoints": manual_waypoints.as_posix(),
+            "pose_annotation_mode": "position_plus_yaw",
             "replay_scene_usd": "/tmp/scene.usdc",
             "robot_specific_valid_for_training": False,
             "route_is_user_annotated": not automatic,
             "route_source": "oracle" if automatic else "manual",
             "source_of_truth": "usd",
             "trajectory": trajectory.as_posix(),
+            "uses_manual_yaw": not automatic,
             "used_blend": False,
             "used_xform_fallback": True,
         },
@@ -131,10 +145,14 @@ def _write_replay_dataset(root: Path, manual_trajectory: Path, manual_waypoints:
                 "depth_path": f"sensors/depth/{idx:06d}.npy",
                 "distance_to_camera_path": f"sensors/distance_to_camera/{idx:06d}.npy",
                 "manual_route_frame_idx": idx,
+                "nearest_manual_waypoint_idx": row["nearest_manual_waypoint_idx"],
                 "oracle_action": row["discrete_action"],
                 "oracle_next_waypoint": row["next_waypoint"],
+                "pose_annotation_mode": row["pose_annotation_mode"],
                 "rgb_path": f"sensors/rgb/{idx:06d}.png",
                 "route_source": "manual",
+                "uses_manual_yaw": True,
+                "yaw_source": row["yaw_source"],
             }
             for idx, row in enumerate(rows)
         ],

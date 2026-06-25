@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--manual-trajectory", required=True)
     parser.add_argument("--pose-tolerance-m", type=float, default=1e-5)
+    parser.add_argument("--yaw-tolerance-rad", type=float, default=1e-5)
     return parser.parse_args()
 
 
@@ -38,11 +39,26 @@ def _pose_distance_xy(a: list[Any], b: list[Any]) -> float:
     return math.hypot(float(a[0]) - float(b[0]), float(a[1]) - float(b[1]))
 
 
+def _yaw_delta(a: float, b: float) -> float:
+    value = float(a) - float(b)
+    while value >= math.pi:
+        value -= 2.0 * math.pi
+    while value < -math.pi:
+        value += 2.0 * math.pi
+    return abs(value)
+
+
 def _count_files(root: Path, pattern: str) -> int:
     return len([p for p in root.glob(pattern) if p.is_file()])
 
 
-def run_qa(dataset: str | Path, manual_trajectory: str | Path, *, pose_tolerance_m: float = 1e-5) -> dict[str, Any]:
+def run_qa(
+    dataset: str | Path,
+    manual_trajectory: str | Path,
+    *,
+    pose_tolerance_m: float = 1e-5,
+    yaw_tolerance_rad: float = 1e-5,
+) -> dict[str, Any]:
     root = Path(dataset)
     manual_trajectory_path = Path(manual_trajectory)
     failures: list[str] = []
@@ -60,6 +76,10 @@ def run_qa(dataset: str | Path, manual_trajectory: str | Path, *, pose_tolerance
             failures.append(f"metadata route_source is not manual: {metadata.get('route_source')!r}")
         if metadata.get("route_is_user_annotated") is not True:
             failures.append(f"metadata route_is_user_annotated is not true: {metadata.get('route_is_user_annotated')!r}")
+        if metadata.get("pose_annotation_mode") != "position_plus_yaw":
+            failures.append(f"metadata pose_annotation_mode is not position_plus_yaw: {metadata.get('pose_annotation_mode')!r}")
+        if metadata.get("uses_manual_yaw") is not True:
+            failures.append(f"metadata uses_manual_yaw is not true: {metadata.get('uses_manual_yaw')!r}")
         if not _same_path(metadata.get("trajectory"), manual_trajectory_path):
             failures.append(f"metadata trajectory does not match manual trajectory: {metadata.get('trajectory')!r}")
         manual_waypoints = metadata.get("manual_waypoints")
@@ -94,6 +114,16 @@ def run_qa(dataset: str | Path, manual_trajectory: str | Path, *, pose_tolerance
             if row.get("route_source") != "manual":
                 failures.append(f"manual trajectory row {idx} route_source is not manual")
                 break
+            pose = row.get("base_pose_world")
+            if not isinstance(pose, list) or len(pose) != 3 or not math.isfinite(float(pose[2])):
+                failures.append(f"manual trajectory row {idx} is missing finite yaw")
+                break
+            if row.get("pose_annotation_mode") != "position_plus_yaw":
+                failures.append(f"manual trajectory row {idx} pose_annotation_mode is not position_plus_yaw")
+                break
+            if row.get("yaw_source") not in {"manual_interpolated", "manual_keyframe", "manual_rotation"}:
+                failures.append(f"manual trajectory row {idx} yaw_source is not manual: {row.get('yaw_source')!r}")
+                break
 
     if not manifest_path.exists():
         failures.append(f"frame_manifest.jsonl does not exist: {manifest_path}")
@@ -108,11 +138,27 @@ def run_qa(dataset: str | Path, manual_trajectory: str | Path, *, pose_tolerance
             if row.get("manual_route_frame_idx") is None:
                 failures.append(f"manifest row {idx} missing manual_route_frame_idx")
                 break
+            pose = row.get("base_pose_world")
+            if not isinstance(pose, list) or len(pose) != 3 or not math.isfinite(float(pose[2])):
+                failures.append(f"manifest row {idx} is missing finite yaw")
+                break
+            if row.get("pose_annotation_mode") != "position_plus_yaw":
+                failures.append(f"manifest row {idx} pose_annotation_mode is not position_plus_yaw")
+                break
+            if row.get("uses_manual_yaw") is not True:
+                failures.append(f"manifest row {idx} uses_manual_yaw is not true")
+                break
+            if row.get("yaw_source") not in {"manual_interpolated", "manual_keyframe", "manual_rotation"}:
+                failures.append(f"manifest row {idx} yaw_source is not manual: {row.get('yaw_source')!r}")
+                break
 
     if manifest and manual_rows:
         first_distance = _pose_distance_xy(manifest[0]["base_pose_world"], manual_rows[0]["base_pose_world"])
         if first_distance > pose_tolerance_m:
             failures.append(f"manifest first pose does not match manual trajectory first pose: distance={first_distance}")
+        first_yaw_delta = _yaw_delta(float(manifest[0]["base_pose_world"][2]), float(manual_rows[0]["base_pose_world"][2]))
+        if first_yaw_delta > yaw_tolerance_rad:
+            failures.append(f"manifest first yaw does not match manual trajectory first yaw: delta={first_yaw_delta}")
         last_idx = int(manifest[-1].get("manual_route_frame_idx", len(manifest) - 1))
         if not (0 <= last_idx < len(manual_rows)):
             failures.append(f"manifest last manual_route_frame_idx out of range: {last_idx}")
@@ -120,6 +166,16 @@ def run_qa(dataset: str | Path, manual_trajectory: str | Path, *, pose_tolerance
             last_distance = _pose_distance_xy(manifest[-1]["base_pose_world"], manual_rows[last_idx]["base_pose_world"])
             if last_distance > pose_tolerance_m:
                 failures.append(f"manifest last pose does not match manual trajectory row {last_idx}: distance={last_distance}")
+            last_yaw_delta = _yaw_delta(float(manifest[-1]["base_pose_world"][2]), float(manual_rows[last_idx]["base_pose_world"][2]))
+            if last_yaw_delta > yaw_tolerance_rad:
+                failures.append(f"manifest last yaw does not match manual trajectory row {last_idx}: delta={last_yaw_delta}")
+        for idx, row in enumerate(manifest):
+            manual_idx = int(row.get("manual_route_frame_idx", idx))
+            if 0 <= manual_idx < len(manual_rows):
+                yaw_delta = _yaw_delta(float(row["base_pose_world"][2]), float(manual_rows[manual_idx]["base_pose_world"][2]))
+                if yaw_delta > yaw_tolerance_rad:
+                    failures.append(f"manifest row {idx} yaw does not match manual trajectory row {manual_idx}: delta={yaw_delta}")
+                    break
 
     manifest_count = len(manifest)
     rgb_count = _count_files(root, "sensors/rgb/*.png")
@@ -143,11 +199,13 @@ def run_qa(dataset: str | Path, manual_trajectory: str | Path, *, pose_tolerance
         "metadata": metadata_path.as_posix(),
         "passed": not failures,
         "photometric_valid_for_training": metadata.get("photometric_valid_for_training"),
+        "pose_annotation_mode": metadata.get("pose_annotation_mode"),
         "rgb_count": rgb_count,
         "robot_specific_valid_for_training": metadata.get("robot_specific_valid_for_training"),
         "route_is_user_annotated": metadata.get("route_is_user_annotated"),
         "route_source": metadata.get("route_source"),
         "trajectory": metadata.get("trajectory"),
+        "uses_manual_yaw": metadata.get("uses_manual_yaw"),
         "used_xform_fallback": metadata.get("used_xform_fallback"),
     }
     write_json(root / "manual_route_replay_qa.json", summary)
@@ -156,10 +214,17 @@ def run_qa(dataset: str | Path, manual_trajectory: str | Path, *, pose_tolerance
 
 def main() -> None:
     args = parse_args()
-    summary = run_qa(args.dataset, args.manual_trajectory, pose_tolerance_m=float(args.pose_tolerance_m))
+    summary = run_qa(
+        args.dataset,
+        args.manual_trajectory,
+        pose_tolerance_m=float(args.pose_tolerance_m),
+        yaw_tolerance_rad=float(args.yaw_tolerance_rad),
+    )
     print(f"dataset: {summary['dataset']}")
     print(f"route_source: {summary['route_source']}")
     print(f"route_is_user_annotated: {summary['route_is_user_annotated']}")
+    print(f"pose_annotation_mode: {summary['pose_annotation_mode']}")
+    print(f"uses_manual_yaw: {summary['uses_manual_yaw']}")
     print(f"trajectory: {summary['trajectory']}")
     print(f"manifest/RGB/depth/distance: {summary['manifest_count']} / {summary['rgb_count']} / {summary['depth_count']} / {summary['distance_to_camera_count']}")
     print(f"pass/fail: {'pass' if summary['passed'] else 'fail'}")

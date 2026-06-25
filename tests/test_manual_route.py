@@ -41,15 +41,19 @@ def _write_map(tmp_path: Path, traversable: np.ndarray) -> Path:
 
 def _manual_doc() -> dict:
     return {
+        "all_user_waypoints_have_yaw": True,
+        "pose_annotation_mode": "position_plus_yaw",
         "random_seed": 3,
+        "requires_heading_click": True,
         "route_source": "manual",
         "start_pose_source": "random_reachable_traversable",
         "start_pose_world": [1.5, 1.5, 1.23],
-        "user_waypoints": [{"idx": 1, "kind": "manual", "x": 8.5, "y": 8.5, "yaw": 0.0}],
+        "user_waypoints": [{"idx": 1, "kind": "manual", "x": 8.5, "y": 8.5, "yaw": 0.0, "yaw_source": "manual_heading_click"}],
         "full_waypoints": [
-            {"idx": 0, "kind": "start", "x": 1.5, "y": 1.5, "yaw": 1.23},
-            {"idx": 1, "kind": "manual", "x": 8.5, "y": 8.5, "yaw": 0.0},
+            {"idx": 0, "kind": "start", "x": 1.5, "y": 1.5, "yaw": 1.23, "yaw_source": "random_start"},
+            {"idx": 1, "kind": "manual", "x": 8.5, "y": 8.5, "yaw": 0.0, "yaw_source": "manual_heading_click"},
         ],
+        "yaw_convention": "radians, world XY, 0 along +X, positive CCW",
     }
 
 
@@ -112,6 +116,8 @@ def test_manual_trajectory_first_pose_is_start_and_jsonl_roundtrip(tmp_path: Pat
     write_json(
         route_dir / "manual_route_metadata.json",
         {
+            "all_user_waypoints_have_yaw": True,
+            "pose_annotation_mode": "position_plus_yaw",
             "random_seed": 3,
             "source_of_truth": "usd",
             "start_pose_world": [1.5, 1.5, 1.23],
@@ -166,15 +172,19 @@ def test_qa_detects_illegal_start_pose(tmp_path: Path) -> None:
     write_json(
         route_dir / "manual_waypoints_world.json",
         {
+            "all_user_waypoints_have_yaw": True,
+            "pose_annotation_mode": "position_plus_yaw",
             "random_seed": 4,
+            "requires_heading_click": True,
             "route_source": "manual",
             "start_pose_source": "random_reachable_traversable",
             "start_pose_world": [2.5, 2.5, 0.0],
-            "user_waypoints": [{"idx": 1, "kind": "manual", "x": 3.5, "y": 3.5, "yaw": 0.0}],
+            "user_waypoints": [{"idx": 1, "kind": "manual", "x": 3.5, "y": 3.5, "yaw": 0.0, "yaw_source": "manual_heading_click"}],
             "full_waypoints": [
-                {"idx": 0, "kind": "start", "x": 2.5, "y": 2.5, "yaw": 0.0},
-                {"idx": 1, "kind": "manual", "x": 3.5, "y": 3.5, "yaw": 0.0},
+                {"idx": 0, "kind": "start", "x": 2.5, "y": 2.5, "yaw": 0.0, "yaw_source": "random_start"},
+                {"idx": 1, "kind": "manual", "x": 3.5, "y": 3.5, "yaw": 0.0, "yaw_source": "manual_heading_click"},
             ],
+            "yaw_convention": "radians, world XY, 0 along +X, positive CCW",
         },
     )
 

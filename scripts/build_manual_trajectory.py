@@ -23,6 +23,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--step-size", type=float, default=0.25)
     parser.add_argument("--snap-to-traversable", action="store_true")
     parser.add_argument("--connect-with-astar", action="store_true")
+    parser.add_argument("--yaw-mode", choices=("annotated", "movement_direction"), default="annotated")
+    parser.add_argument("--yaw-interpolation", choices=("shortest",), default="shortest")
+    parser.add_argument("--insert-rotation-frames", action="store_true")
+    parser.add_argument("--rotation-step-deg", type=float, default=10.0)
     return parser.parse_args()
 
 
@@ -35,6 +39,10 @@ def main() -> None:
         step_size=float(args.step_size),
         snap_to_traversable=bool(args.snap_to_traversable),
         connect_with_astar=bool(args.connect_with_astar),
+        yaw_mode=args.yaw_mode,
+        yaw_interpolation=args.yaw_interpolation,
+        insert_rotation_frames=bool(args.insert_rotation_frames),
+        rotation_step_deg=float(args.rotation_step_deg),
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

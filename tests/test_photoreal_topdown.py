@@ -156,7 +156,17 @@ def test_manual_route_annotation_accepts_photoreal_metadata(tmp_path: Path) -> N
         metadata_path=root / "photoreal_topdown_metadata.json",
         map_dir=tmp_path / "map",
         out_dir=tmp_path / "manual_route",
-        image_waypoints=[{"idx": 1, "u": 40.0, "v": 40.0}],
+        image_waypoints=[
+            {
+                "heading_u": 45.0,
+                "heading_v": 40.0,
+                "idx": 1,
+                "u": 40.0,
+                "v": 40.0,
+                "yaw": 0.0,
+                "yaw_source": "manual_heading_click",
+            }
+        ],
     )
 
     route = read_json(paths["manual_waypoints_world"])

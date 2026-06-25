@@ -62,6 +62,8 @@ QA checks that the clean PNG is nonempty, not all black, not pure color, metadat
 
 ## Manual Annotation
 
+Each manual waypoint is a pose. Click once for the waypoint position, then click a second point to set that waypoint's heading direction. The saved yaw is in adjusted USD world XY radians, with `0` along world `+X` and positive counter-clockwise.
+
 ```bash
 python scripts/manual_route_annotator.py \
   --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
@@ -70,7 +72,7 @@ python scripts/manual_route_annotator.py \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
 ```
 
-After annotation, build `manual_trajectory/manual_dense_trajectory.jsonl` and replay RGB-D from that manual trajectory only. The automatic coverage trajectory is reference-only and must not be used as the data source after a user route has been annotated.
+After annotation, build `manual_trajectory/manual_dense_trajectory.jsonl` with `--yaw-mode annotated --yaw-interpolation shortest` and replay RGB-D from that manual trajectory only. The automatic coverage trajectory is reference-only and must not be used as the data source after a user route has been annotated.
 
 ## Debugging
 

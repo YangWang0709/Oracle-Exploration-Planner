@@ -116,17 +116,40 @@ def infer_manual_waypoints_path(trajectory_path: str | Path, route_source: str) 
     return candidates[0].resolve()
 
 
-def _manual_route_metadata(trajectory_path: Path, route_source: str) -> dict[str, Any]:
+def _trajectory_uses_manual_yaw(rows: list[dict[str, Any]], route_source: str) -> bool:
+    if route_source != "manual" or not rows:
+        return False
+    manual_yaw_sources = {"manual_interpolated", "manual_keyframe", "manual_rotation"}
+    for row in rows:
+        pose = row.get("base_pose_world")
+        if not isinstance(pose, list) or len(pose) != 3 or not math.isfinite(float(pose[2])):
+            return False
+        if row.get("pose_annotation_mode") != "position_plus_yaw":
+            return False
+        if row.get("yaw_source") not in manual_yaw_sources:
+            return False
+    return True
+
+
+def _manual_route_metadata(trajectory_path: Path, route_source: str, rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     manual_waypoints_path = infer_manual_waypoints_path(trajectory_path, route_source)
+    rows = rows or []
+    pose_modes = {str(row.get("pose_annotation_mode")) for row in rows if row.get("pose_annotation_mode")}
+    pose_annotation_mode = next(iter(pose_modes)) if len(pose_modes) == 1 else None
     result: dict[str, Any] = {
         "manual_waypoints": manual_waypoints_path.as_posix() if manual_waypoints_path else None,
+        "pose_annotation_mode": pose_annotation_mode,
         "route_is_user_annotated": route_source == "manual",
+        "uses_manual_yaw": _trajectory_uses_manual_yaw(rows, route_source),
     }
     if manual_waypoints_path and manual_waypoints_path.exists():
         try:
             waypoints = read_json(manual_waypoints_path)
             result["manual_waypoint_count"] = len(waypoints.get("full_waypoints", [])) if isinstance(waypoints, dict) else None
             result["manual_user_waypoint_count"] = len(waypoints.get("user_waypoints", [])) if isinstance(waypoints, dict) else None
+            result["manual_waypoints_pose_annotation_mode"] = waypoints.get("pose_annotation_mode") if isinstance(waypoints, dict) else None
+            if result["pose_annotation_mode"] is None:
+                result["pose_annotation_mode"] = result["manual_waypoints_pose_annotation_mode"]
         except Exception as exc:
             result["manual_waypoints_warning"] = f"failed to read manual waypoints: {type(exc).__name__}: {exc}"
     return result
@@ -156,7 +179,7 @@ def run_dry_run(args: argparse.Namespace) -> dict[str, Any]:
         raise FileNotFoundError(f"Trajectory file does not exist: {trajectory_path}")
     rows = load_trajectory(trajectory_path, args.max_frames)
     route_source = infer_route_source(rows)
-    manual_meta = _manual_route_metadata(trajectory_path, route_source)
+    manual_meta = _manual_route_metadata(trajectory_path, route_source, rows)
     paths = output_paths(Path(args.out).resolve())
     report = {
         "add_camera_fill_light": bool(args.add_camera_fill_light),
@@ -581,7 +604,7 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
     trajectory_path = Path(args.trajectory).resolve()
     rows = load_trajectory(trajectory_path, args.max_frames)
     route_source = infer_route_source(rows)
-    manual_meta = _manual_route_metadata(trajectory_path, route_source)
+    manual_meta = _manual_route_metadata(trajectory_path, route_source, rows)
     paths = output_paths(Path(args.out).resolve())
 
     simulation_app = SimulationApp({"headless": bool(args.headless)})
@@ -688,10 +711,14 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
                     "manual_route_frame_idx": int(row.get("frame_idx", local_idx)) if route_source == "manual" else None,
                     "oracle_action": row.get("discrete_action"),
                     "oracle_next_waypoint": row.get("next_waypoint"),
+                    "nearest_manual_waypoint_idx": row.get("nearest_manual_waypoint_idx"),
+                    "pose_annotation_mode": row.get("pose_annotation_mode"),
                     "rgb_path": rgb_rel,
                     "route_source": row.get("route_source", route_source),
                     "scene_id": args.scene_id,
                     "timestamp": float(row.get("t", local_idx)),
+                    "uses_manual_yaw": bool(route_source == "manual" and row.get("pose_annotation_mode") == "position_plus_yaw"),
+                    "yaw_source": row.get("yaw_source"),
                 }
             )
 

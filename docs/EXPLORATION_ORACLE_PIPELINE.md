@@ -25,7 +25,7 @@ Isaac Sim replay is implemented in `scripts/replay_path_collect_rgbd_isaac.py`. 
 
 Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 
-Manual route annotation is implemented with `scripts/render_manual_annotation_semantic_floorplan.py`, `scripts/render_manual_annotation_photoreal_topdown_isaac.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. Semantic floorplans are best for furniture/category readability, photoreal topdown maps are best for realistic scene appearance review, and geometry footprints are debug-only. The previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
+Manual route annotation is implemented with `scripts/render_manual_annotation_semantic_floorplan.py`, `scripts/render_manual_annotation_photoreal_topdown_isaac.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. Manual routes are pose routes: every waypoint records adjusted USD world `x`, `y`, and user-annotated `yaw`. Semantic floorplans are best for furniture/category readability, photoreal topdown maps are best for realistic scene appearance review, and geometry footprints are debug-only. The previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
 
 The current photometric validation scene is seed 201, documented in
 `docs/SEED_201_USD_SOURCE_OF_TRUTH.md` and `docs/SEED_201_ADJUSTED_RESULTS.md`.
@@ -96,7 +96,7 @@ Current validated seed 201 result:
 - Final coverage: `0.9808366046177873`
 - No-fill RGB-D smoke test: passed with RGB black-frame ratio `0.0`
 - Automatic path overlay review: deprecated; no longer recommended for route audit
-- Manual route annotation: recommended user route-audit workflow, using semantic floorplan or photoreal orthographic topdown base maps
+- Manual route annotation: recommended user route-audit workflow, using semantic floorplan or photoreal orthographic topdown base maps; manual waypoints are `x, y, yaw` poses
 - 100-frame no-fill RGB-D pilot: passed QA with RGB/depth/`distance_to_camera` counts `100 / 100 / 100`
 - `photometric_valid_for_training`: `true`
 - `robot_specific_valid_for_training`: `false` until a real robot USD is available
@@ -187,6 +187,8 @@ Manual annotation artifacts:
 - `manual_trajectory/manual_trajectory_stats.json`
 - `manual_trajectory/manual_trajectory_preview.png`
 - `manual_route/manual_route_qa.json`
+
+Manual trajectory records must include `pose_annotation_mode=position_plus_yaw`, `yaw_source`, and `nearest_manual_waypoint_idx`. RGB-D replay metadata for user routes must include `uses_manual_yaw=true`; downstream VLM/exploration observations and action labels depend on the user-marked camera yaw, not only the XY path.
 
 Generated map, path, image, video, USD, blend, RGB-D, `.npy`, and dataset artifacts remain under `outputs/` or the external Infinigen tree and are not committed. Durable result summaries should be written into docs.
 

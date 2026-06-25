@@ -27,11 +27,11 @@ The semantic floorplan is generated directly from imported adjusted USD mesh geo
 
 1. Render a clean semantic floorplan or photoreal orthographic topdown map from the adjusted USD.
 2. Randomly initialize a legal robot start pose from the reachable/traversable map.
-3. User manually clicks route waypoints on the base image.
-4. Convert clicked image coordinates to adjusted USD world coordinates.
+3. User manually clicks route waypoint poses on the base image.
+4. Convert clicked image coordinates and heading clicks to adjusted USD world `x, y, yaw`.
 5. Use A* only to connect adjacent user waypoints through traversable space.
-6. Generate `manual_dense_trajectory.jsonl`.
-7. Replay RGB-D using the manual trajectory only.
+6. Generate `manual_dense_trajectory.jsonl` using annotated yaw by default.
+7. Replay RGB-D using the manual trajectory poses only.
 
 The default start pose is random but reproducible with `--random-seed`. It is sampled from cells that are in bounds, reachable, traversable, outside occupied/inflated obstacles, and satisfy the requested clearance.
 
@@ -141,14 +141,26 @@ python scripts/manual_route_annotator.py \
 
 Annotator controls:
 
-- Left click: add a user waypoint after the start pose.
-- Right click or `u`: undo the latest user waypoint.
+- Left click once: set the next waypoint position.
+- Left click again: set that waypoint heading direction and save the waypoint pose.
+- Mouse move after the first click: preview the pending heading arrow.
+- Right click or `u`: cancel the pending waypoint, or undo the latest complete waypoint pose.
+- `d`: delete the latest complete waypoint pose.
 - `r`: reset user waypoints without deleting the start.
-- `s`: save.
-- `q`: quit.
+- `s` or `Ctrl+S`: save.
+- `q`: warn on unsaved changes, then quit if pressed again.
+- `Q`: force quit without saving.
 - `h`: show help.
 - `n`: resample a random start using the next random seed.
 - `S`: set the current cursor position as the start.
+- `[` / `]`: adjust the current or latest waypoint yaw by 5 degrees.
+- `a`: set the recent waypoint yaw toward the next waypoint, if one exists.
+
+Yaw convention:
+
+- `yaw=0` points along adjusted USD world `+X`.
+- Positive yaw is counter-clockwise in adjusted USD world XY.
+- Values are stored in radians and normalized to `[-pi, pi)`.
 
 You can also override the start from the command line:
 
@@ -177,7 +189,9 @@ python scripts/build_manual_trajectory.py \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory" \
   --step-size 0.25 \
   --snap-to-traversable \
-  --connect-with-astar
+  --connect-with-astar \
+  --yaw-mode annotated \
+  --yaw-interpolation shortest
 ```
 
 Manual trajectory outputs:
@@ -187,6 +201,8 @@ Manual trajectory outputs:
 - `manual_actions.jsonl`
 - `manual_trajectory_stats.json`
 - `manual_trajectory_preview.png`
+
+`manual_dense_trajectory.jsonl` stores `base_pose_world=[x, y, yaw]` for every frame, plus `yaw_source`, `nearest_manual_waypoint_idx`, `route_source=manual`, and `pose_annotation_mode=position_plus_yaw`. A* connects waypoint positions only; dense trajectory yaw comes from the user-annotated waypoint yaw with shortest-angle interpolation.
 
 Run QA:
 
@@ -215,7 +231,7 @@ Replay manual-route RGB-D after the user has saved a manual route:
   --min-rgb-mean-brightness 5.0
 ```
 
-Do not run this replay until a user-created manual route exists. The replay metadata must contain `route_source=manual` and `route_is_user_annotated=true`; if it does not, the dataset should not be treated as user-annotated route data.
+Do not run this replay until a user-created manual route exists. The replay metadata must contain `route_source=manual`, `route_is_user_annotated=true`, `pose_annotation_mode=position_plus_yaw`, and `uses_manual_yaw=true`; if it does not, the dataset should not be treated as user-annotated route data.
 
 Replay QA:
 
@@ -254,6 +270,17 @@ python scripts/qa_manual_route_replay.py \
 - `photometric_valid_for_training`
 
 The annotator uses this start as waypoint `0`. User clicks become waypoint `1`, `2`, and so on. The saved world waypoint file separates `start_pose_world`, `user_waypoints`, and `full_waypoints`.
+
+The saved manual route is now a pose route, not only an XY route. `manual_waypoints_world.json` records:
+
+- `pose_annotation_mode=position_plus_yaw`
+- `requires_heading_click=true`
+- `all_user_waypoints_have_yaw=true`
+- `yaw_convention="radians, world XY, 0 along +X, positive CCW"`
+- `start_pose_world=[x, y, yaw]`
+- each user waypoint's `x`, `y`, `yaw`, `yaw_deg`, `yaw_source`, and `heading_world`
+
+The automatic movement direction is only a fallback mode and is not the default for manual route trajectories.
 
 ## Replay Rule
 
