@@ -72,12 +72,19 @@ python scripts/manual_route_annotator.py \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
 ```
 
-Use lowercase `s` or `Ctrl+S` to save. Uppercase `S` sets the current cursor as the start pose; it does not save. After saving, verify:
+The annotator runs in hard autosave mode. Each route-changing operation writes `manual_route/autosave/`, every completed waypoint pose final-saves the route, and lowercase `q` final-saves before quitting when no pending waypoint is missing heading. Lowercase `s` or `Ctrl+S` remains available as a manual extra save, but you no longer need to rely on it. Uppercase `S` sets the current cursor as the start pose; it does not save. Uppercase `Q` force-quits and writes autosave, but does not final-save an incomplete pending point. After saving, verify:
 
 ```bash
 ls -lah outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route
 cat outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route/SAVED_OK.txt
 python scripts/check_manual_route_saved.py \
+  --manual-route-dir outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route
+```
+
+If final files are missing but autosave exists:
+
+```bash
+python scripts/recover_manual_route_autosave.py \
   --manual-route-dir outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route
 ```
 

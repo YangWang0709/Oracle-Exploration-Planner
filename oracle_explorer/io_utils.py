@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -27,6 +28,26 @@ def write_json(path: str | Path, data: Any, *, indent: int = 2) -> Path:
         json.dump(data, f, indent=indent, sort_keys=True)
         f.write("\n")
     return out
+
+
+def write_text_atomic(path: str | Path, text: str) -> Path:
+    """Atomically write text using a sibling .tmp file and os.replace."""
+
+    out = Path(path)
+    if out.parent:
+        out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(f"{out.name}.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, out)
+    return out
+
+
+def write_json_atomic(path: str | Path, data: Any, *, indent: int = 2) -> Path:
+    text = json.dumps(data, indent=indent, sort_keys=True) + "\n"
+    return write_text_atomic(path, text)
 
 
 def read_jsonl(path: str | Path) -> list[Any]:
@@ -57,4 +78,3 @@ def relative_to(path: str | Path, root: str | Path) -> str:
         return path_obj.relative_to(root_obj).as_posix()
     except ValueError:
         return path_obj.as_posix()
-

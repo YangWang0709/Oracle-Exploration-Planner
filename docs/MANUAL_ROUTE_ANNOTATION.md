@@ -187,16 +187,32 @@ Annotator controls:
 - Right click or `u`: cancel the pending waypoint, or undo the latest complete waypoint pose.
 - `d`: delete the latest complete waypoint pose.
 - `r`: reset user waypoints without deleting the start.
-- Lowercase `s` or `Ctrl+S`: save.
-- Lowercase `q`: warn when unsaved changes exist.
-- `Q`: force quit without saving.
+- Lowercase `s` or `Ctrl+S`: manually save again. This is no longer the only save path.
+- Lowercase `q`: final-save automatically and quit when no pending waypoint exists.
+- `Q`: force quit; it still writes autosave but does not final-save an incomplete pending point.
 - `h`: show help.
 - `n`: resample a random start using the next random seed.
 - Uppercase `S`: set the current cursor position as the start. This is not save.
+- Uppercase `R`: recover a complete autosave when a final save is missing.
 - `[` / `]`: adjust the current or latest waypoint yaw by 5 degrees.
 - `a`: set the recent waypoint yaw toward the next waypoint, if one exists.
 
-When a save succeeds, the terminal prints absolute paths and the output directory receives:
+The annotator now runs in hard autosave mode:
+
+- Every route-changing operation writes `manual_route/autosave/`.
+- Clicking a waypoint position writes a draft autosave, even before heading is chosen.
+- Completing a waypoint pose immediately final-saves the route.
+- `q` final-saves before quitting when no pending waypoint is missing heading.
+- `s` / `Ctrl+S` is only a manual extra save.
+
+Autosave files:
+
+- `autosave/manual_waypoints_world.autosave.json`
+- `autosave/manual_waypoints_image.autosave.json`
+- `autosave/manual_route_metadata.autosave.json`
+- `autosave/AUTOSAVE_OK.txt`
+
+When final save succeeds, the terminal prints absolute paths and the output directory receives:
 
 - `manual_waypoints_world.json`
 - `manual_waypoints_image.json`
@@ -214,6 +230,13 @@ python scripts/check_manual_route_saved.py \
 ```
 
 `manual_waypoints_world.json` must exist before `build_manual_trajectory.py` can run. If it is missing, the route was not saved successfully, was saved to a different output directory, or `outputs/` was cleaned after saving.
+
+If final files are missing but autosave exists, recover only when there is no pending waypoint missing heading:
+
+```bash
+python scripts/recover_manual_route_autosave.py \
+  --manual-route-dir outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route
+```
 
 Yaw convention:
 

@@ -45,6 +45,15 @@ def check_manual_route_saved(manual_route_dir: str | Path) -> dict[str, Any]:
     warnings: list[str] = []
     missing_files: list[str] = []
     world_doc: dict[str, Any] = {}
+    autosave_dir = root / "autosave"
+    autosave_ok_path = autosave_dir / "AUTOSAVE_OK.txt"
+    autosave_world_path = autosave_dir / "manual_waypoints_world.autosave.json"
+    saved_ok_path = root / "SAVED_OK.txt"
+    autosave_exists = autosave_dir.exists()
+    autosave_ok_exists = autosave_ok_path.exists()
+    final_save_exists = (root / "manual_waypoints_world.json").exists()
+    last_autosave_time = autosave_ok_path.stat().st_mtime if autosave_ok_exists else None
+    last_final_save_time = saved_ok_path.stat().st_mtime if saved_ok_path.exists() else None
 
     if not root.exists():
         failures.append(f"manual route dir does not exist: {root}")
@@ -90,10 +99,17 @@ def check_manual_route_saved(manual_route_dir: str | Path) -> dict[str, Any]:
             if missing_yaw:
                 failures.append(f"full_waypoints missing finite yaw at indices: {missing_yaw[:20]}")
 
-    saved_ok_path = root / "SAVED_OK.txt"
     saved_ok_text = saved_ok_path.read_text(encoding="utf-8") if saved_ok_path.exists() else ""
     if saved_ok_text and "manual_waypoints_world=" not in saved_ok_text:
         warnings.append("SAVED_OK.txt exists but does not list manual_waypoints_world")
+    if autosave_exists and not autosave_ok_exists:
+        warnings.append("autosave directory exists but AUTOSAVE_OK.txt is missing")
+    if autosave_world_path.exists() and not final_save_exists:
+        warnings.append("autosave exists but final manual_waypoints_world.json is missing; consider recover_manual_route_autosave.py")
+
+    final_newer_than_autosave = None
+    if last_final_save_time is not None and last_autosave_time is not None:
+        final_newer_than_autosave = bool(last_final_save_time >= last_autosave_time)
 
     summary = {
         "all_full_waypoints_have_yaw": bool(
@@ -101,8 +117,16 @@ def check_manual_route_saved(manual_route_dir: str | Path) -> dict[str, Any]:
             and full_waypoints
             and all(isinstance(wp, dict) and _finite_number(wp.get("yaw")) for wp in full_waypoints)
         ),
+        "autosave_dir": autosave_dir.as_posix(),
+        "autosave_exists": autosave_exists,
+        "autosave_ok": autosave_ok_path.as_posix(),
+        "autosave_ok_exists": autosave_ok_exists,
         "failures": failures,
+        "final_newer_than_autosave": final_newer_than_autosave,
+        "final_save_exists": final_save_exists,
         "full_waypoint_count": len(full_waypoints) if isinstance(full_waypoints, list) else 0,
+        "last_autosave_mtime": last_autosave_time,
+        "last_final_save_mtime": last_final_save_time,
         "manual_route_dir": root.as_posix(),
         "missing_files": missing_files,
         "passed": not failures,
@@ -125,6 +149,8 @@ def main() -> None:
     print(f"pose_annotation_mode: {summary['pose_annotation_mode']}")
     print(f"start_pose_world: {summary['start_pose_world']}")
     print(f"SAVED_OK: {summary['saved_ok']}")
+    print(f"autosave: {summary['autosave_dir']} exists={summary['autosave_exists']} ok={summary['autosave_ok_exists']}")
+    print(f"final_newer_than_autosave: {summary['final_newer_than_autosave']}")
     print(f"pass/fail: {'pass' if summary['passed'] else 'fail'}")
     if summary["missing_files"]:
         print("missing files:")

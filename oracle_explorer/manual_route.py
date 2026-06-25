@@ -20,7 +20,7 @@ from .grid import (
     path_is_collision_free,
     world_to_grid,
 )
-from .io_utils import ensure_dir, read_json, read_jsonl, write_json, write_jsonl
+from .io_utils import ensure_dir, read_json, read_jsonl, write_json, write_json_atomic, write_jsonl, write_text_atomic
 from .start_sampling import validate_start_pose
 from .trajectory import path_to_poses, poses_to_records
 
@@ -250,17 +250,19 @@ def preview_manual_route(
     return out
 
 
-def save_manual_route_annotation(
+def _manual_route_documents(
     *,
     base_image: str | Path,
     metadata_path: str | Path,
     map_dir: str | Path,
-    out_dir: str | Path,
     image_waypoints: Sequence[dict[str, Any]],
     start_pose_world: Sequence[float] | None = None,
     start_pose_source: str | None = None,
     random_seed: int | None = None,
-) -> dict[str, Path]:
+    pending_waypoint: dict[str, Any] | None = None,
+    force_quit: bool = False,
+    final_save_completed: bool = True,
+) -> dict[str, Any]:
     metadata = read_json(metadata_path)
     start_pose = [float(v) for v in (start_pose_world or metadata.get("start_pose_world") or [])]
     if len(start_pose) != 3:
@@ -316,9 +318,26 @@ def save_manual_route_annotation(
     warnings: list[str] = []
     if not user_world_rows:
         warnings.append("Only start pose exists; add at least one waypoint before building a trajectory.")
+    pending_image = None
+    pending_world = None
+    pending_missing_heading = False
+    if pending_waypoint is not None:
+        pending_image = [float(pending_waypoint["u"]), float(pending_waypoint["v"])]
+        try:
+            px, py = image_to_world_xy(metadata, pending_image[0], pending_image[1])
+            pending_world = [px, py]
+        except Exception:
+            pending_world = None
+        pending_missing_heading = not _finite_yaw(pending_waypoint.get("yaw"))
     image_doc = {
         "all_user_waypoints_have_yaw": all_have_yaw,
+        "final_save_completed": bool(final_save_completed),
+        "force_quit": bool(force_quit),
         "full_waypoints": full_image_rows,
+        "has_pending_waypoint": pending_waypoint is not None,
+        "pending_missing_heading": pending_missing_heading,
+        "pending_waypoint_image": pending_image,
+        "pending_waypoint_world": pending_world,
         "pose_annotation_mode": POSE_ANNOTATION_MODE,
         "random_seed": seed,
         "requires_heading_click": True,
@@ -330,7 +349,13 @@ def save_manual_route_annotation(
     }
     world_doc = {
         "all_user_waypoints_have_yaw": all_have_yaw,
+        "final_save_completed": bool(final_save_completed),
+        "force_quit": bool(force_quit),
         "full_waypoints": full_world_rows,
+        "has_pending_waypoint": pending_waypoint is not None,
+        "pending_missing_heading": pending_missing_heading,
+        "pending_waypoint_image": pending_image,
+        "pending_waypoint_world": pending_world,
         "pose_annotation_mode": POSE_ANNOTATION_MODE,
         "random_seed": seed,
         "requires_heading_click": True,
@@ -340,17 +365,6 @@ def save_manual_route_annotation(
         "user_waypoints": user_world_rows,
         "yaw_convention": YAW_CONVENTION,
     }
-    out = ensure_dir(out_dir)
-    paths = {
-        "manual_route_metadata": out / "manual_route_metadata.json",
-        "manual_route_preview": out / "manual_route_preview.png",
-        "manual_waypoints_image": out / "manual_waypoints_image.json",
-        "manual_waypoints_world": out / "manual_waypoints_world.json",
-        "saved_ok": out / "SAVED_OK.txt",
-    }
-    write_json(paths["manual_waypoints_image"], image_doc)
-    write_json(paths["manual_waypoints_world"], world_doc)
-    preview_manual_route(base_image, full_image_rows, paths["manual_route_preview"])
     route_metadata = {
         "base_image": Path(base_image).as_posix(),
         "base_map_type": metadata.get("base_map_type"),
@@ -362,8 +376,15 @@ def save_manual_route_annotation(
             "No automatic route overlay, direction indicators, or coverage planner route was used for annotation.",
         ],
         "all_user_waypoints_have_yaw": all_have_yaw,
+        "autosave_enabled": True,
+        "final_save_completed": bool(final_save_completed),
+        "force_quit": bool(force_quit),
+        "has_pending_waypoint": pending_waypoint is not None,
         "random_seed": seed,
         "render_backend": metadata.get("render_backend"),
+        "pending_missing_heading": pending_missing_heading,
+        "pending_waypoint_image": pending_image,
+        "pending_waypoint_world": pending_world,
         "pose_annotation_mode": POSE_ANNOTATION_MODE,
         "requires_heading_click": True,
         "scene_usd": metadata.get("scene_usd"),
@@ -377,28 +398,290 @@ def save_manual_route_annotation(
         "waypoints_snapped_to_traversable_map": False,
         "yaw_convention": YAW_CONVENTION,
     }
-    write_json(paths["manual_route_metadata"], route_metadata)
+    return {
+        "full_image_rows": full_image_rows,
+        "full_world_rows": full_world_rows,
+        "image_doc": image_doc,
+        "metadata": route_metadata,
+        "pending_missing_heading": pending_missing_heading,
+        "warnings": warnings,
+        "world_doc": world_doc,
+    }
+
+
+def _ok_text(
+    *,
+    out: Path,
+    paths: dict[str, Path],
+    user_waypoint_count: int,
+    full_waypoint_count: int,
+    all_waypoints_have_yaw: bool,
+    warnings: Sequence[str],
+    timestamp_key: str,
+) -> str:
     saved_at = datetime.now(timezone.utc).isoformat()
-    saved_ok_lines = [
-        f"saved_at={saved_at}",
+    world_key = "manual_waypoints_world" if "manual_waypoints_world" in paths else "manual_waypoints_world_autosave"
+    image_key = "manual_waypoints_image" if "manual_waypoints_image" in paths else "manual_waypoints_image_autosave"
+    metadata_key = "manual_route_metadata" if "manual_route_metadata" in paths else "manual_route_metadata_autosave"
+    lines = [
+        f"{timestamp_key}={saved_at}",
         f"out_dir={out.resolve()}",
-        f"manual_waypoints_world={paths['manual_waypoints_world'].resolve()}",
-        f"manual_waypoints_image={paths['manual_waypoints_image'].resolve()}",
-        f"manual_route_preview={paths['manual_route_preview'].resolve()}",
-        f"manual_route_metadata={paths['manual_route_metadata'].resolve()}",
-        f"user_waypoint_count={len(user_world_rows)}",
-        f"full_waypoint_count={len(full_world_rows)}",
+        f"manual_waypoints_world={paths[world_key].resolve()}",
+        f"manual_waypoints_image={paths[image_key].resolve()}",
+        f"manual_route_metadata={paths[metadata_key].resolve()}",
+        f"user_waypoint_count={user_waypoint_count}",
+        f"full_waypoint_count={full_waypoint_count}",
         f"pose_annotation_mode={POSE_ANNOTATION_MODE}",
-        f"all_waypoints_have_yaw={all(_finite_yaw(wp.get('yaw')) for wp in full_world_rows)}",
-        f"all_user_waypoints_have_yaw={all_have_yaw}",
+        f"all_waypoints_have_yaw={all_waypoints_have_yaw}",
+        f"all_user_waypoints_have_yaw={all_waypoints_have_yaw}",
     ]
+    if "manual_route_preview" in paths:
+        lines.insert(4, f"manual_route_preview={paths['manual_route_preview'].resolve()}")
     if warnings:
-        saved_ok_lines.extend(f"warning={warning}" for warning in warnings)
-    paths["saved_ok"].write_text("\n".join(saved_ok_lines) + "\n", encoding="utf-8")
+        lines.extend(f"warning={warning}" for warning in warnings)
+    return "\n".join(lines) + "\n"
+
+
+def validate_manual_route_save(out_dir: str | Path) -> dict[str, Any]:
+    out = Path(out_dir)
+    paths = {
+        "manual_route_metadata": out / "manual_route_metadata.json",
+        "manual_route_preview": out / "manual_route_preview.png",
+        "manual_waypoints_image": out / "manual_waypoints_image.json",
+        "manual_waypoints_world": out / "manual_waypoints_world.json",
+        "saved_ok": out / "SAVED_OK.txt",
+    }
+    failures: list[str] = []
+    for label, path in paths.items():
+        if not path.exists():
+            failures.append(f"missing {label}: {path}")
+        elif label == "manual_route_preview" and path.stat().st_size <= 0:
+            failures.append(f"manual_route_preview is empty: {path}")
+    world_doc = None
+    if paths["manual_waypoints_world"].exists():
+        try:
+            loaded = read_json(paths["manual_waypoints_world"])
+            if not isinstance(loaded, dict):
+                failures.append("manual_waypoints_world.json is not an object")
+            else:
+                world_doc = loaded
+        except Exception as exc:
+            failures.append(f"manual_waypoints_world.json is not parseable: {type(exc).__name__}: {exc}")
+    if world_doc:
+        if world_doc.get("pose_annotation_mode") != POSE_ANNOTATION_MODE:
+            failures.append(f"pose_annotation_mode is not {POSE_ANNOTATION_MODE}")
+        start = world_doc.get("start_pose_world")
+        if not isinstance(start, list) or len(start) != 3:
+            failures.append("start_pose_world is missing")
+        full = world_doc.get("full_waypoints")
+        if not isinstance(full, list) or not full:
+            failures.append("full_waypoints is missing")
+        else:
+            missing_yaw = [idx for idx, wp in enumerate(full) if not isinstance(wp, dict) or not _finite_yaw(wp.get("yaw"))]
+            if missing_yaw:
+                failures.append(f"full_waypoints missing finite yaw at indices: {missing_yaw[:20]}")
+    return {"failures": failures, "passed": not failures, "paths": {k: v.as_posix() for k, v in paths.items()}}
+
+
+def save_manual_route_annotation(
+    *,
+    base_image: str | Path,
+    metadata_path: str | Path,
+    map_dir: str | Path,
+    out_dir: str | Path,
+    image_waypoints: Sequence[dict[str, Any]],
+    start_pose_world: Sequence[float] | None = None,
+    start_pose_source: str | None = None,
+    random_seed: int | None = None,
+) -> dict[str, Path]:
+    docs = _manual_route_documents(
+        base_image=base_image,
+        metadata_path=metadata_path,
+        map_dir=map_dir,
+        image_waypoints=image_waypoints,
+        start_pose_world=start_pose_world,
+        start_pose_source=start_pose_source,
+        random_seed=random_seed,
+    )
+    out = ensure_dir(out_dir)
+    paths = {
+        "manual_route_metadata": out / "manual_route_metadata.json",
+        "manual_route_preview": out / "manual_route_preview.png",
+        "manual_waypoints_image": out / "manual_waypoints_image.json",
+        "manual_waypoints_world": out / "manual_waypoints_world.json",
+        "saved_ok": out / "SAVED_OK.txt",
+    }
+    write_json_atomic(paths["manual_waypoints_image"], docs["image_doc"])
+    write_json_atomic(paths["manual_waypoints_world"], docs["world_doc"])
+    write_json_atomic(paths["manual_route_metadata"], docs["metadata"])
+    preview_manual_route(base_image, docs["full_image_rows"], paths["manual_route_preview"])
+    write_text_atomic(
+        paths["saved_ok"],
+        _ok_text(
+            out=out,
+            paths=paths,
+            user_waypoint_count=len(docs["world_doc"]["user_waypoints"]),
+            full_waypoint_count=len(docs["full_world_rows"]),
+            all_waypoints_have_yaw=all(_finite_yaw(wp.get("yaw")) for wp in docs["full_world_rows"]),
+            warnings=docs["warnings"],
+            timestamp_key="saved_at",
+        ),
+    )
+    validation = validate_manual_route_save(out)
+    if not validation["passed"]:
+        raise RuntimeError(f"Manual route save validation failed: {validation['failures']}")
     missing = [label for label, path in paths.items() if not path.exists()]
     if missing:
         raise RuntimeError(f"Manual route save failed; missing files after save: {missing}")
     return paths
+
+
+def save_manual_route_autosave(
+    *,
+    base_image: str | Path,
+    metadata_path: str | Path,
+    map_dir: str | Path,
+    out_dir: str | Path,
+    image_waypoints: Sequence[dict[str, Any]],
+    pending_waypoint: dict[str, Any] | None = None,
+    start_pose_world: Sequence[float] | None = None,
+    start_pose_source: str | None = None,
+    random_seed: int | None = None,
+    force_quit: bool = False,
+    final_save_completed: bool = False,
+) -> dict[str, Path]:
+    docs = _manual_route_documents(
+        base_image=base_image,
+        metadata_path=metadata_path,
+        map_dir=map_dir,
+        image_waypoints=image_waypoints,
+        pending_waypoint=pending_waypoint,
+        start_pose_world=start_pose_world,
+        start_pose_source=start_pose_source,
+        random_seed=random_seed,
+        force_quit=force_quit,
+        final_save_completed=final_save_completed,
+    )
+    out = ensure_dir(Path(out_dir) / "autosave")
+    paths = {
+        "autosave_ok": out / "AUTOSAVE_OK.txt",
+        "manual_route_metadata_autosave": out / "manual_route_metadata.autosave.json",
+        "manual_waypoints_image_autosave": out / "manual_waypoints_image.autosave.json",
+        "manual_waypoints_world_autosave": out / "manual_waypoints_world.autosave.json",
+    }
+    write_json_atomic(paths["manual_waypoints_image_autosave"], docs["image_doc"])
+    write_json_atomic(paths["manual_waypoints_world_autosave"], docs["world_doc"])
+    write_json_atomic(paths["manual_route_metadata_autosave"], docs["metadata"])
+    text = _ok_text(
+        out=out,
+        paths=paths,
+        user_waypoint_count=len(docs["world_doc"]["user_waypoints"]),
+        full_waypoint_count=len(docs["full_world_rows"]),
+        all_waypoints_have_yaw=all(_finite_yaw(wp.get("yaw")) for wp in docs["full_world_rows"]),
+        warnings=docs["warnings"],
+        timestamp_key="autosaved_at",
+    )
+    text += f"has_pending_waypoint={pending_waypoint is not None}\n"
+    text += f"pending_missing_heading={docs['pending_missing_heading']}\n"
+    text += f"force_quit={force_quit}\n"
+    text += f"final_save_completed={final_save_completed}\n"
+    write_text_atomic(paths["autosave_ok"], text)
+    missing = [label for label, path in paths.items() if not path.exists()]
+    if missing:
+        raise RuntimeError(f"Manual route autosave failed; missing files after autosave: {missing}")
+    return paths
+
+
+def recover_manual_route_from_autosave(manual_route_dir: str | Path) -> dict[str, Any]:
+    root = ensure_dir(manual_route_dir)
+    autosave = root / "autosave"
+    failures: list[str] = []
+    source_paths = {
+        "manual_route_metadata": autosave / "manual_route_metadata.autosave.json",
+        "manual_waypoints_image": autosave / "manual_waypoints_image.autosave.json",
+        "manual_waypoints_world": autosave / "manual_waypoints_world.autosave.json",
+    }
+    for label, path in source_paths.items():
+        if not path.exists():
+            failures.append(f"missing autosave {label}: {path}")
+    if failures:
+        return {"failures": failures, "passed": False, "recovered": False}
+    world_doc = read_json(source_paths["manual_waypoints_world"])
+    image_doc = read_json(source_paths["manual_waypoints_image"])
+    metadata_doc = read_json(source_paths["manual_route_metadata"])
+    if world_doc.get("has_pending_waypoint") or metadata_doc.get("pending_missing_heading"):
+        failures.append("autosave has a pending waypoint missing heading; cannot recover a complete final route")
+        return {"failures": failures, "passed": False, "recovered": False}
+    if not world_doc.get("user_waypoints"):
+        failures.append("autosave has no user waypoints; cannot recover a complete final route")
+        return {"failures": failures, "passed": False, "recovered": False}
+    full = world_doc.get("full_waypoints", [])
+    if any(not _finite_yaw(wp.get("yaw")) for wp in full if isinstance(wp, dict)):
+        failures.append("autosave has waypoints without yaw; cannot recover a complete final route")
+        return {"failures": failures, "passed": False, "recovered": False}
+
+    target_paths = {
+        "manual_route_metadata": root / "manual_route_metadata.json",
+        "manual_route_preview": root / "manual_route_preview.png",
+        "manual_waypoints_image": root / "manual_waypoints_image.json",
+        "manual_waypoints_world": root / "manual_waypoints_world.json",
+        "saved_ok": root / "SAVED_OK.txt",
+    }
+    world_doc["final_save_completed"] = True
+    world_doc["recovered_from_autosave"] = True
+    image_doc["final_save_completed"] = True
+    image_doc["recovered_from_autosave"] = True
+    write_json_atomic(target_paths["manual_waypoints_world"], world_doc)
+    write_json_atomic(target_paths["manual_waypoints_image"], image_doc)
+    metadata_doc["final_save_completed"] = True
+    metadata_doc["recovered_from_autosave"] = True
+    write_json_atomic(target_paths["manual_route_metadata"], metadata_doc)
+    base_image = metadata_doc.get("base_image")
+    if base_image and Path(base_image).exists():
+        preview_manual_route(base_image, image_doc.get("full_waypoints", []), target_paths["manual_route_preview"])
+    write_text_atomic(
+        target_paths["saved_ok"],
+        _ok_text(
+            out=root,
+            paths=target_paths,
+            user_waypoint_count=len(world_doc.get("user_waypoints", [])),
+            full_waypoint_count=len(world_doc.get("full_waypoints", [])),
+            all_waypoints_have_yaw=all(_finite_yaw(wp.get("yaw")) for wp in world_doc.get("full_waypoints", [])),
+            warnings=["Recovered from autosave; reopen the annotator to regenerate manual_route_preview.png if needed."],
+            timestamp_key="saved_at",
+        ),
+    )
+    return {
+        "failures": [],
+        "passed": True,
+        "recovered": True,
+        "target_paths": {k: v.as_posix() for k, v in target_paths.items()},
+    }
+
+
+def load_manual_route_annotation_state(manual_route_dir: str | Path) -> dict[str, Any]:
+    root = Path(manual_route_dir)
+    world_path = root / "manual_waypoints_world.json"
+    image_path = root / "manual_waypoints_image.json"
+    if not world_path.exists() or not image_path.exists():
+        raise FileNotFoundError(f"manual route final files are missing under {root}")
+    world_doc = read_json(world_path)
+    image_doc = read_json(image_path)
+    if not isinstance(world_doc, dict) or not isinstance(image_doc, dict):
+        raise ValueError("manual route final files must be JSON objects")
+    start_pose = world_doc.get("start_pose_world")
+    if not isinstance(start_pose, list) or len(start_pose) != 3:
+        raise ValueError("manual route is missing start_pose_world")
+    return {
+        "image_doc": image_doc,
+        "image_path": image_path,
+        "random_seed": world_doc.get("random_seed"),
+        "start_pose_source": world_doc.get("start_pose_source"),
+        "start_pose_world": [float(v) for v in start_pose],
+        "user_waypoints": list(image_doc.get("user_waypoints", [])),
+        "world_doc": world_doc,
+        "world_path": world_path,
+    }
 
 
 def nearest_reachable_cell(target: GridIndex, reachable_grid: np.ndarray) -> GridIndex:
