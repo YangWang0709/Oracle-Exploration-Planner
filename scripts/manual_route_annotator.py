@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,8 +33,8 @@ from oracle_explorer.start_sampling import sample_random_start_pose
 
 HELP = (
     "Left click: waypoint position, then heading direction | Right click/u: undo | d: delete pose | "
-    "r: reset | s/Ctrl+S: save | q: quit | Q: force quit | n: resample start | "
-    "S: cursor as start | [/]: yaw +/-5 deg | a: yaw toward next | h: help"
+    "r: reset | lowercase s/Ctrl+S: save | q: quit | Q: force quit | n: resample start | "
+    "uppercase S: cursor as start | [/]: yaw +/-5 deg | a: yaw toward next | h: help"
 )
 
 
@@ -88,6 +89,7 @@ def main() -> None:
 
     state: dict[str, Any] = {
         "last_cursor": None,
+        "last_saved_time": None,
         "pending_waypoint": None,
         "quit_requested": False,
         "random_seed": None,
@@ -111,8 +113,9 @@ def main() -> None:
             state["unsaved_changes"] = bool(unsaved)
 
     def status_title() -> str:
-        dirty = " | Unsaved changes" if state.get("unsaved_changes") else ""
-        return f"{state['status']}{dirty}\n{HELP}"
+        saved = f"last saved: {state['last_saved_time']}" if state.get("last_saved_time") else "not saved"
+        dirty = "unsaved" if state.get("unsaved_changes") else "saved"
+        return f"{state['status']} | {dirty} | {saved}\nout: {Path(args.out).resolve()}\n{HELP}"
 
     def add_arrow(u: float, v: float, yaw: float, *, color: str, length: float = 44.0) -> None:
         hu = float(u) + float(length) * math.cos(float(yaw))
@@ -173,10 +176,16 @@ def main() -> None:
 
     def save() -> None:
         if state.get("pending_waypoint") is not None:
-            print("Finish the pending waypoint heading click before saving.")
-            set_status(f"Click heading direction for waypoint {state['pending_waypoint']['idx']}")
+            message = (
+                f"Waypoint {state['pending_waypoint']['idx']} is missing heading. "
+                "Click heading direction or press u to cancel pending waypoint."
+            )
+            print(message)
+            set_status(message)
             draw()
             return
+        if not state["user_waypoints"]:
+            print("Warning: Only start pose exists; add at least one waypoint before building a trajectory.")
         paths = save_manual_route_annotation(
             base_image=base_image,
             metadata_path=metadata_path,
@@ -187,11 +196,17 @@ def main() -> None:
             start_pose_source=state["start_pose_source"],
             random_seed=state["random_seed"],
         )
+        state["last_saved_time"] = datetime.now().isoformat(timespec="seconds")
         set_status("Saved manual route", unsaved=False)
         state["quit_requested"] = False
-        print("Saved manual route:")
+        world_path = paths["manual_waypoints_world"].resolve()
+        print("Saved manual route to:")
+        print(f"  {world_path}")
+        print("All saved files:")
         for label, path in paths.items():
-            print(f"- {label}: {path}")
+            if not path.exists():
+                raise RuntimeError(f"Expected saved file does not exist after save: {path}")
+            print(f"- {label}: {path.resolve()}")
         draw()
 
     def resample_start() -> None:
@@ -324,6 +339,8 @@ def main() -> None:
             set_recent_yaw_toward_next()
         elif key == "ctrl+s":
             save()
+        elif key == "control+s":
+            save()
         elif key == "r":
             state["user_waypoints"].clear()
             state["pending_waypoint"] = None
@@ -332,9 +349,9 @@ def main() -> None:
         elif key == "s":
             save()
         elif key == "q":
-            if state.get("unsaved_changes") and not state.get("quit_requested"):
+            if state.get("unsaved_changes"):
                 state["quit_requested"] = True
-                set_status("Unsaved changes; press s to save or q/Q again to quit")
+                set_status("Unsaved changes. Press s to save, Q to force quit.")
                 draw()
             else:
                 plt.close(fig)

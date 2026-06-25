@@ -187,14 +187,33 @@ Annotator controls:
 - Right click or `u`: cancel the pending waypoint, or undo the latest complete waypoint pose.
 - `d`: delete the latest complete waypoint pose.
 - `r`: reset user waypoints without deleting the start.
-- `s` or `Ctrl+S`: save.
-- `q`: warn on unsaved changes, then quit if pressed again.
+- Lowercase `s` or `Ctrl+S`: save.
+- Lowercase `q`: warn when unsaved changes exist.
 - `Q`: force quit without saving.
 - `h`: show help.
 - `n`: resample a random start using the next random seed.
-- `S`: set the current cursor position as the start.
+- Uppercase `S`: set the current cursor position as the start. This is not save.
 - `[` / `]`: adjust the current or latest waypoint yaw by 5 degrees.
 - `a`: set the recent waypoint yaw toward the next waypoint, if one exists.
+
+When a save succeeds, the terminal prints absolute paths and the output directory receives:
+
+- `manual_waypoints_world.json`
+- `manual_waypoints_image.json`
+- `manual_route_metadata.json`
+- `manual_route_preview.png`
+- `SAVED_OK.txt`
+
+Confirm the save before building a trajectory:
+
+```bash
+ls -lah outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route
+cat outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route/SAVED_OK.txt
+python scripts/check_manual_route_saved.py \
+  --manual-route-dir outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route
+```
+
+`manual_waypoints_world.json` must exist before `build_manual_trajectory.py` can run. If it is missing, the route was not saved successfully, was saved to a different output directory, or `outputs/` was cleaned after saving.
 
 Yaw convention:
 

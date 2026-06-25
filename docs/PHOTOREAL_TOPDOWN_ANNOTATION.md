@@ -72,6 +72,17 @@ python scripts/manual_route_annotator.py \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
 ```
 
+Use lowercase `s` or `Ctrl+S` to save. Uppercase `S` sets the current cursor as the start pose; it does not save. After saving, verify:
+
+```bash
+ls -lah outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route
+cat outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route/SAVED_OK.txt
+python scripts/check_manual_route_saved.py \
+  --manual-route-dir outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route
+```
+
+`manual_waypoints_world.json` must exist before building `manual_dense_trajectory.jsonl`. If the check fails, do not run replay; save again or inspect the output directory printed by the annotator.
+
 After annotation, build `manual_trajectory/manual_dense_trajectory.jsonl` with `--yaw-mode annotated --yaw-interpolation shortest` and replay RGB-D from that manual trajectory only. The automatic coverage trajectory is reference-only and must not be used as the data source after a user route has been annotated.
 
 ## Replay Rule

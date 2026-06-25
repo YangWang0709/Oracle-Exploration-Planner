@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -312,6 +313,9 @@ def save_manual_route_annotation(
     full_image_rows = [start_image] + image_rows
     full_world_rows = [start_world] + user_world_rows
     all_have_yaw = all(_finite_yaw(wp.get("yaw")) for wp in user_world_rows)
+    warnings: list[str] = []
+    if not user_world_rows:
+        warnings.append("Only start pose exists; add at least one waypoint before building a trajectory.")
     image_doc = {
         "all_user_waypoints_have_yaw": all_have_yaw,
         "full_waypoints": full_image_rows,
@@ -342,6 +346,7 @@ def save_manual_route_annotation(
         "manual_route_preview": out / "manual_route_preview.png",
         "manual_waypoints_image": out / "manual_waypoints_image.json",
         "manual_waypoints_world": out / "manual_waypoints_world.json",
+        "saved_ok": out / "SAVED_OK.txt",
     }
     write_json(paths["manual_waypoints_image"], image_doc)
     write_json(paths["manual_waypoints_world"], world_doc)
@@ -367,11 +372,32 @@ def save_manual_route_annotation(
         "start_pose_world": start_pose,
         "user_waypoint_count": len(image_rows),
         "used_blend": metadata.get("used_blend"),
+        "warnings": warnings,
         "waypoint_count": len(full_world_rows),
         "waypoints_snapped_to_traversable_map": False,
         "yaw_convention": YAW_CONVENTION,
     }
     write_json(paths["manual_route_metadata"], route_metadata)
+    saved_at = datetime.now(timezone.utc).isoformat()
+    saved_ok_lines = [
+        f"saved_at={saved_at}",
+        f"out_dir={out.resolve()}",
+        f"manual_waypoints_world={paths['manual_waypoints_world'].resolve()}",
+        f"manual_waypoints_image={paths['manual_waypoints_image'].resolve()}",
+        f"manual_route_preview={paths['manual_route_preview'].resolve()}",
+        f"manual_route_metadata={paths['manual_route_metadata'].resolve()}",
+        f"user_waypoint_count={len(user_world_rows)}",
+        f"full_waypoint_count={len(full_world_rows)}",
+        f"pose_annotation_mode={POSE_ANNOTATION_MODE}",
+        f"all_waypoints_have_yaw={all(_finite_yaw(wp.get('yaw')) for wp in full_world_rows)}",
+        f"all_user_waypoints_have_yaw={all_have_yaw}",
+    ]
+    if warnings:
+        saved_ok_lines.extend(f"warning={warning}" for warning in warnings)
+    paths["saved_ok"].write_text("\n".join(saved_ok_lines) + "\n", encoding="utf-8")
+    missing = [label for label, path in paths.items() if not path.exists()]
+    if missing:
+        raise RuntimeError(f"Manual route save failed; missing files after save: {missing}")
     return paths
 
 
