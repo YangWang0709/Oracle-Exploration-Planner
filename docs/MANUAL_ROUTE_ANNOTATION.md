@@ -2,7 +2,7 @@
 
 ## Why Manual Routes
 
-The old automatic path overlay review has been deprecated. The 1000-point path markers plus heading arrows were too dense for route review, so they are no longer the recommended user-facing route audit workflow.
+The old automatic path overlay review has been deprecated. The 1000-point path markers plus direction indicators were too dense for route review, so they are no longer the recommended user-facing route audit workflow.
 
 The automatic `trajectory_usd_blender` output can still be used as a reference trajectory, but the route that a user approves should now come from manual annotation.
 

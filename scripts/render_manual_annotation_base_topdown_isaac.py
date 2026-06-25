@@ -238,7 +238,7 @@ def run_render(args: argparse.Namespace) -> dict[str, Any]:
             "min_start_clearance_m": float(args.min_start_clearance_m),
             "notes": [
                 "Clean top-down base image for manual route annotation.",
-                "No automatic route, heading arrows, waypoint overlay, or coverage-planner path was drawn.",
+                "No automatic route, direction indicators, waypoint overlay, or coverage-planner path was drawn.",
                 "Start marker is an image annotation only; the source USD was not modified or saved.",
             ],
             "outputs": {

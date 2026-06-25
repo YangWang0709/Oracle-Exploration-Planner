@@ -22,7 +22,7 @@ The map, manual annotation base image, manual trajectory, and replay must all us
 
 ## Deprecated Automatic Path Overlay
 
-The old automatic path overlay review is deprecated and should not be used as the main user route-audit entry point. It was too visually cluttered because it drew dense path markers, sparse waypoints, and heading arrows over the scene.
+The old automatic path overlay review is deprecated and should not be used as the main user route-audit entry point. It was too visually cluttered because it drew dense path markers, sparse waypoints, and direction indicators over the scene.
 
 The automatic `trajectory_usd_blender` result remains available as a reference path, but user-approved routes should be created with manual annotation.
 

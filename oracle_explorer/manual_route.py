@@ -215,7 +215,7 @@ def save_manual_route_annotation(
         "map_dir": Path(map_dir).as_posix(),
         "notes": [
             "Manual route starts from the recorded start pose; user clicks append route waypoints.",
-            "No automatic route overlay, heading arrows, or coverage planner route was used for annotation.",
+            "No automatic route overlay, direction indicators, or coverage planner route was used for annotation.",
         ],
         "random_seed": seed,
         "scene_usd": metadata.get("scene_usd"),
