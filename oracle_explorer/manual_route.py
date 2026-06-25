@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -31,6 +32,12 @@ COORDINATE_CONVENTION = (
 )
 POSE_ANNOTATION_MODE = "position_plus_yaw"
 YAW_CONVENTION = "radians, world XY, 0 along +X, positive CCW"
+DEFAULT_PHOTOREAL_PREVIEW_BASE_IMAGE = Path(
+    "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png"
+)
+DEFAULT_PHOTOREAL_PREVIEW_METADATA = Path(
+    "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json"
+)
 
 
 def load_map_bundle(map_dir: str | Path) -> dict[str, Any]:
@@ -182,6 +189,25 @@ def image_heading_point_from_yaw(metadata: dict[str, Any], u: float, v: float, y
     return world_to_image_uv(metadata, hx, hy)
 
 
+def preview_backend_from_metadata(metadata: dict[str, Any]) -> str:
+    for key in ("preview_backend", "base_map_type", "render_backend"):
+        value = metadata.get(key)
+        if not value:
+            continue
+        text = str(value)
+        lowered = text.lower()
+        if "photoreal" in lowered:
+            return "photoreal_topdown"
+        if "semantic" in lowered:
+            return "semantic_floorplan"
+        if "geometry" in lowered or "footprint" in lowered:
+            return "geometry_footprint"
+        if "topdown" in lowered:
+            return "topdown_base"
+        return text
+    return "unknown_base_image"
+
+
 def _finite_yaw(value: Any) -> bool:
     try:
         return math.isfinite(float(value))
@@ -248,6 +274,210 @@ def preview_manual_route(
     out.parent.mkdir(parents=True, exist_ok=True)
     image.save(out)
     return out
+
+
+def _image_in_bounds(u: float, v: float, width: int, height: int) -> bool:
+    return 0.0 <= float(u) < float(width) and 0.0 <= float(v) < float(height)
+
+
+def _record_pose_world(record: dict[str, Any]) -> tuple[float, float, float] | None:
+    pose = record.get("base_pose_world") or record.get("pose_world")
+    if isinstance(pose, (list, tuple)) and len(pose) >= 3:
+        try:
+            x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
+        except Exception:
+            return None
+        if math.isfinite(x) and math.isfinite(y) and math.isfinite(yaw):
+            return x, y, normalize_yaw(yaw)
+    if all(key in record for key in ("x", "y", "yaw")):
+        try:
+            x, y, yaw = float(record["x"]), float(record["y"]), float(record["yaw"])
+        except Exception:
+            return None
+        if math.isfinite(x) and math.isfinite(y) and math.isfinite(yaw):
+            return x, y, normalize_yaw(yaw)
+    return None
+
+
+def _waypoint_pose_world(waypoint: dict[str, Any]) -> tuple[float, float, float] | None:
+    try:
+        x, y = float(waypoint["x"]), float(waypoint["y"])
+        yaw = float(waypoint.get("yaw", 0.0))
+    except Exception:
+        return None
+    if math.isfinite(x) and math.isfinite(y) and math.isfinite(yaw):
+        return x, y, normalize_yaw(yaw)
+    return None
+
+
+def _draw_heading_arrow(
+    draw: ImageDraw.ImageDraw,
+    u: float,
+    v: float,
+    yaw: float,
+    *,
+    length_px: float,
+    fill: tuple[int, int, int],
+    width: int,
+) -> None:
+    end_u = float(u) + float(length_px) * math.cos(float(yaw))
+    end_v = float(v) - float(length_px) * math.sin(float(yaw))
+    draw.line((u, v, end_u, end_v), fill=fill, width=width)
+    head_len = max(5.0, float(length_px) * 0.28)
+    for delta in (math.radians(150.0), -math.radians(150.0)):
+        angle = float(yaw) + delta
+        hu = end_u + head_len * math.cos(angle)
+        hv = end_v - head_len * math.sin(angle)
+        draw.line((end_u, end_v, hu, hv), fill=fill, width=width)
+
+
+def render_manual_trajectory_preview_on_base_image(
+    base_image_path: str | Path,
+    metadata_path: str | Path,
+    dense_trajectory_records: Sequence[dict[str, Any]],
+    sparse_waypoints: Sequence[dict[str, Any]],
+    out_path: str | Path,
+    *,
+    preview_stride: int = 10,
+    draw_heading_arrows: bool = True,
+    draw_waypoint_labels: bool = True,
+) -> dict[str, Any]:
+    """Render manual dense trajectory and sparse poses on the annotation base image."""
+
+    base_path = Path(base_image_path)
+    metadata_file = Path(metadata_path)
+    metadata = read_json(metadata_file)
+    image = Image.open(base_path).convert("RGB")
+    width, height = image.size
+    draw = ImageDraw.Draw(image)
+
+    dense_projected: list[dict[str, Any]] = []
+    dense_in_bounds_count = 0
+    for idx, record in enumerate(dense_trajectory_records):
+        pose = _record_pose_world(record)
+        if pose is None:
+            continue
+        x, y, yaw = pose
+        try:
+            u, v = world_to_image_uv(metadata, x, y)
+        except Exception:
+            continue
+        in_bounds_image = _image_in_bounds(u, v, width, height)
+        dense_in_bounds_count += int(in_bounds_image)
+        dense_projected.append({"idx": idx, "u": u, "v": v, "yaw": yaw, "in_bounds": in_bounds_image})
+
+    sparse_projected: list[dict[str, Any]] = []
+    sparse_in_bounds_count = 0
+    for idx, waypoint in enumerate(sparse_waypoints):
+        pose = _waypoint_pose_world(waypoint)
+        if pose is None:
+            continue
+        x, y, yaw = pose
+        try:
+            u, v = world_to_image_uv(metadata, x, y)
+        except Exception:
+            continue
+        in_bounds_image = _image_in_bounds(u, v, width, height)
+        sparse_in_bounds_count += int(in_bounds_image)
+        sparse_projected.append(
+            {
+                "idx": int(waypoint.get("idx", idx)),
+                "kind": waypoint.get("kind", "manual"),
+                "u": u,
+                "v": v,
+                "yaw": yaw,
+                "in_bounds": in_bounds_image,
+            }
+        )
+
+    dense_segments: list[list[tuple[float, float]]] = []
+    current_segment: list[tuple[float, float]] = []
+    for point in dense_projected:
+        if point["in_bounds"]:
+            current_segment.append((float(point["u"]), float(point["v"])))
+        elif current_segment:
+            dense_segments.append(current_segment)
+            current_segment = []
+    if current_segment:
+        dense_segments.append(current_segment)
+
+    path_width = max(3, int(round(min(width, height) / 180.0)))
+    for segment in dense_segments:
+        if len(segment) > 1:
+            draw.line(segment, fill=(20, 135, 255), width=path_width, joint="curve")
+        elif segment:
+            u, v = segment[0]
+            draw.ellipse((u - path_width, v - path_width, u + path_width, v + path_width), fill=(20, 135, 255))
+
+    heading_arrow_count = 0
+    stride = max(1, int(preview_stride))
+    if draw_heading_arrows:
+        arrow_length = max(14.0, min(width, height) / 32.0)
+        for point in dense_projected[::stride]:
+            if not point["in_bounds"]:
+                continue
+            _draw_heading_arrow(
+                draw,
+                float(point["u"]),
+                float(point["v"]),
+                float(point["yaw"]),
+                length_px=arrow_length,
+                fill=(5, 35, 75),
+                width=max(2, path_width - 1),
+            )
+            heading_arrow_count += 1
+
+    waypoint_heading_arrow_count = 0
+    waypoint_radius = max(6, int(round(min(width, height) / 110.0)))
+    for order, point in enumerate(sparse_projected):
+        if not point["in_bounds"]:
+            continue
+        u, v = float(point["u"]), float(point["v"])
+        if order == 0 or point.get("kind") == "start":
+            fill = (20, 210, 85)
+        elif order == len(sparse_projected) - 1:
+            fill = (240, 70, 60)
+        else:
+            fill = (255, 220, 30)
+        draw.ellipse((u - waypoint_radius, v - waypoint_radius, u + waypoint_radius, v + waypoint_radius), fill=fill, outline=(0, 0, 0), width=2)
+        if draw_waypoint_labels:
+            draw.text((u + waypoint_radius + 3, v - waypoint_radius - 4), str(point["idx"]), fill=(0, 0, 0))
+        if draw_heading_arrows:
+            _draw_heading_arrow(
+                draw,
+                u,
+                v,
+                float(point["yaw"]),
+                length_px=max(18.0, min(width, height) / 24.0),
+                fill=(0, 0, 0),
+                width=max(2, path_width),
+            )
+            waypoint_heading_arrow_count += 1
+
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    image.save(out)
+    dense_count = len(dense_projected)
+    sparse_count = len(sparse_projected)
+    return {
+        "base_image": base_path.as_posix(),
+        "dense_in_bounds_count": dense_in_bounds_count,
+        "dense_in_bounds_ratio": (dense_in_bounds_count / dense_count) if dense_count else 0.0,
+        "dense_projected_count": dense_count,
+        "draw_heading_arrows": bool(draw_heading_arrows),
+        "draw_waypoint_labels": bool(draw_waypoint_labels),
+        "heading_arrow_count": heading_arrow_count,
+        "image_height": height,
+        "image_width": width,
+        "manual_trajectory_preview": out.as_posix(),
+        "preview_backend": preview_backend_from_metadata(metadata),
+        "preview_metadata": metadata_file.as_posix(),
+        "preview_stride": stride,
+        "sparse_in_bounds_count": sparse_in_bounds_count,
+        "sparse_projected_count": sparse_count,
+        "waypoint_heading_arrow_count": waypoint_heading_arrow_count,
+        "world_to_image_transform": metadata.get("world_to_image_transform") or metadata.get("world_to_image"),
+    }
 
 
 def _manual_route_documents(
@@ -386,6 +616,9 @@ def _manual_route_documents(
         "pending_waypoint_image": pending_image,
         "pending_waypoint_world": pending_world,
         "pose_annotation_mode": POSE_ANNOTATION_MODE,
+        "preview_backend": preview_backend_from_metadata(metadata),
+        "preview_base_image": Path(base_image).as_posix(),
+        "preview_metadata": Path(metadata_path).as_posix(),
         "requires_heading_click": True,
         "scene_usd": metadata.get("scene_usd"),
         "source_of_truth": metadata.get("source_of_truth"),
@@ -1074,6 +1307,98 @@ def build_manual_trajectory_data(
     }
 
 
+def _resolve_preview_path(value: Any, *, anchor_dir: Path | None = None) -> Path | None:
+    if not value:
+        return None
+    path = Path(str(value))
+    if path.exists() or path.is_absolute() or anchor_dir is None:
+        return path
+    anchored = anchor_dir / path
+    return anchored if anchored.exists() else path
+
+
+def resolve_manual_trajectory_preview_inputs(
+    *,
+    manual_waypoints_path: str | Path | None = None,
+    preview_base_image: str | Path | None = None,
+    preview_metadata: str | Path | None = None,
+    preview_mode: str = "auto",
+) -> dict[str, Any]:
+    mode = str(preview_mode or "auto").lower()
+    if mode in {"map", "debug", "fallback_map_debug"}:
+        return {
+            "base_image": None,
+            "metadata_path": None,
+            "preview_backend": "fallback_map_debug",
+            "source": "preview_mode_map",
+            "fallback_reason": "preview_mode requested map/debug preview",
+        }
+
+    if preview_base_image or preview_metadata:
+        if not preview_base_image or not preview_metadata:
+            raise ValueError("--preview-base-image and --preview-metadata must be provided together.")
+        return {
+            "base_image": Path(preview_base_image),
+            "metadata_path": Path(preview_metadata),
+            "preview_backend": "photoreal_topdown" if mode == "photoreal" else "base_image",
+            "source": "cli",
+            "fallback_reason": None,
+        }
+
+    attempted: list[str] = []
+    route_metadata_path: Path | None = None
+    if manual_waypoints_path is not None:
+        route_metadata_path = Path(manual_waypoints_path).parent / "manual_route_metadata.json"
+        if route_metadata_path.exists():
+            try:
+                route_metadata = read_json(route_metadata_path)
+            except Exception as exc:
+                attempted.append(f"{route_metadata_path}: {type(exc).__name__}: {exc}")
+            else:
+                base = _resolve_preview_path(
+                    route_metadata.get("preview_base_image") or route_metadata.get("base_image"),
+                    anchor_dir=route_metadata_path.parent,
+                )
+                metadata = _resolve_preview_path(
+                    route_metadata.get("preview_metadata") or route_metadata.get("metadata_path"),
+                    anchor_dir=route_metadata_path.parent,
+                )
+                if base and metadata and base.exists() and metadata.exists():
+                    return {
+                        "base_image": base,
+                        "metadata_path": metadata,
+                        "preview_backend": route_metadata.get("preview_backend") or route_metadata.get("base_map_type") or "base_image",
+                        "source": "manual_route_metadata",
+                        "fallback_reason": None,
+                    }
+                attempted.append(
+                    "manual_route_metadata paths missing: "
+                    f"base_image={base.as_posix() if base else None}, metadata={metadata.as_posix() if metadata else None}"
+                )
+        elif route_metadata_path is not None:
+            attempted.append(f"manual_route_metadata not found: {route_metadata_path}")
+
+    if DEFAULT_PHOTOREAL_PREVIEW_BASE_IMAGE.exists() and DEFAULT_PHOTOREAL_PREVIEW_METADATA.exists():
+        return {
+            "base_image": DEFAULT_PHOTOREAL_PREVIEW_BASE_IMAGE,
+            "metadata_path": DEFAULT_PHOTOREAL_PREVIEW_METADATA,
+            "preview_backend": "photoreal_topdown",
+            "source": "default_photoreal_topdown",
+            "fallback_reason": None,
+        }
+    attempted.append(
+        "default photoreal topdown paths missing: "
+        f"{DEFAULT_PHOTOREAL_PREVIEW_BASE_IMAGE}, {DEFAULT_PHOTOREAL_PREVIEW_METADATA}"
+    )
+    return {
+        "base_image": None,
+        "metadata_path": None,
+        "preview_backend": "fallback_map_debug",
+        "source": "fallback",
+        "fallback_reason": "; ".join(attempted),
+    }
+
+
 def write_manual_trajectory_outputs(
     out_dir: str | Path,
     data: dict[str, Any],
@@ -1081,6 +1406,13 @@ def write_manual_trajectory_outputs(
     map_dir: str | Path,
     occupancy_grid: np.ndarray,
     reachable_grid: np.ndarray,
+    manual_waypoints_path: str | Path | None = None,
+    preview_base_image: str | Path | None = None,
+    preview_metadata: str | Path | None = None,
+    preview_mode: str = "auto",
+    preview_stride: int = 10,
+    draw_heading_arrows: bool = True,
+    draw_waypoint_labels: bool = True,
 ) -> dict[str, Path]:
     out = ensure_dir(out_dir)
     action_rows = [
@@ -1098,16 +1430,80 @@ def write_manual_trajectory_outputs(
         "manual_actions": write_jsonl(out / "manual_actions.jsonl", action_rows),
         "manual_dense_trajectory": write_jsonl(out / "manual_dense_trajectory.jsonl", data["records"]),
         "manual_sparse_waypoints": write_json(out / "manual_sparse_waypoints.json", data["sparse_waypoints"]),
-        "manual_trajectory_stats": write_json(out / "manual_trajectory_stats.json", stats),
     }
-    paths["manual_trajectory_preview"] = save_topdown_map_png(
-        out / "manual_trajectory_preview.png",
+    paths["manual_trajectory_preview_map"] = save_topdown_map_png(
+        out / "manual_trajectory_preview_map.png",
         occupancy_grid=occupancy_grid,
         traversable_grid=reachable_grid,
         reachable_grid=reachable_grid,
         dense_path=data["dense_path"],
         sparse_waypoints=[tuple(wp["grid_ij"]) for wp in data["sparse_waypoints"]],
     )
+    default_preview_path = out / "manual_trajectory_preview.png"
+    preview_metadata_path = out / "manual_trajectory_preview_metadata.json"
+    preview_resolution = resolve_manual_trajectory_preview_inputs(
+        manual_waypoints_path=manual_waypoints_path,
+        preview_base_image=preview_base_image,
+        preview_metadata=preview_metadata,
+        preview_mode=preview_mode,
+    )
+    preview_doc: dict[str, Any]
+    try:
+        base_path = preview_resolution.get("base_image")
+        metadata_path = preview_resolution.get("metadata_path")
+        if base_path is None or metadata_path is None:
+            raise FileNotFoundError(preview_resolution.get("fallback_reason") or "No preview base image and metadata were found.")
+        photoreal_path = out / "manual_trajectory_preview_photoreal.png"
+        preview_doc = render_manual_trajectory_preview_on_base_image(
+            base_path,
+            metadata_path,
+            data["records"],
+            data["sparse_waypoints"],
+            photoreal_path,
+            preview_stride=preview_stride,
+            draw_heading_arrows=draw_heading_arrows,
+            draw_waypoint_labels=draw_waypoint_labels,
+        )
+        preview_doc["preview_input_source"] = preview_resolution.get("source")
+        preview_doc["preview_requested_backend"] = preview_resolution.get("preview_backend")
+        paths["manual_trajectory_preview_photoreal"] = photoreal_path
+        shutil.copyfile(photoreal_path, default_preview_path)
+        paths["manual_trajectory_preview"] = default_preview_path
+    except Exception as exc:
+        shutil.copyfile(paths["manual_trajectory_preview_map"], default_preview_path)
+        paths["manual_trajectory_preview"] = default_preview_path
+        preview_doc = {
+            "base_image": str(preview_resolution.get("base_image")) if preview_resolution.get("base_image") else None,
+            "dense_in_bounds_count": 0,
+            "dense_in_bounds_ratio": 0.0,
+            "dense_projected_count": 0,
+            "draw_heading_arrows": bool(draw_heading_arrows),
+            "draw_waypoint_labels": bool(draw_waypoint_labels),
+            "fallback_reason": f"{type(exc).__name__}: {exc}",
+            "manual_trajectory_preview": default_preview_path.as_posix(),
+            "manual_trajectory_preview_map": paths["manual_trajectory_preview_map"].as_posix(),
+            "preview_backend": "fallback_map_debug",
+            "preview_input_source": preview_resolution.get("source"),
+            "preview_metadata": str(preview_resolution.get("metadata_path")) if preview_resolution.get("metadata_path") else None,
+            "preview_stride": max(1, int(preview_stride)),
+            "sparse_in_bounds_count": 0,
+            "sparse_projected_count": 0,
+            "world_to_image_transform": None,
+        }
+    preview_doc["manual_trajectory_preview_map"] = paths["manual_trajectory_preview_map"].as_posix()
+    preview_doc["manual_trajectory_preview_default"] = paths["manual_trajectory_preview"].as_posix()
+    paths["manual_trajectory_preview_metadata"] = write_json(preview_metadata_path, preview_doc)
+    stats["manual_trajectory_preview"] = paths["manual_trajectory_preview"].as_posix()
+    stats["manual_trajectory_preview_map"] = paths["manual_trajectory_preview_map"].as_posix()
+    if "manual_trajectory_preview_photoreal" in paths:
+        stats["manual_trajectory_preview_photoreal"] = paths["manual_trajectory_preview_photoreal"].as_posix()
+    stats["manual_trajectory_preview_metadata"] = paths["manual_trajectory_preview_metadata"].as_posix()
+    stats["preview_backend"] = preview_doc.get("preview_backend")
+    stats["preview_base_image"] = preview_doc.get("base_image")
+    stats["preview_metadata"] = preview_doc.get("preview_metadata")
+    if preview_doc.get("fallback_reason"):
+        stats["preview_fallback_reason"] = preview_doc.get("fallback_reason")
+    paths["manual_trajectory_stats"] = write_json(out / "manual_trajectory_stats.json", stats)
     return paths
 
 
@@ -1123,6 +1519,12 @@ def build_and_write_manual_trajectory(
     yaw_interpolation: str = "shortest",
     insert_rotation_frames: bool = False,
     rotation_step_deg: float = 10.0,
+    preview_base_image: str | Path | None = None,
+    preview_metadata: str | Path | None = None,
+    preview_mode: str = "auto",
+    preview_stride: int = 10,
+    draw_heading_arrows: bool = True,
+    draw_waypoint_labels: bool = True,
 ) -> dict[str, Any]:
     bundle = load_map_bundle(map_dir)
     waypoints = read_json(manual_waypoints)
@@ -1145,8 +1547,16 @@ def build_and_write_manual_trajectory(
         map_dir=map_dir,
         occupancy_grid=bundle["occupancy"],
         reachable_grid=bundle["reachable"],
+        manual_waypoints_path=manual_waypoints,
+        preview_base_image=preview_base_image,
+        preview_metadata=preview_metadata,
+        preview_mode=preview_mode,
+        preview_stride=preview_stride,
+        draw_heading_arrows=draw_heading_arrows,
+        draw_waypoint_labels=draw_waypoint_labels,
     )
-    return {"paths": {k: v.as_posix() for k, v in paths.items()}, "stats": data["stats"]}
+    stats = read_json(paths["manual_trajectory_stats"]) if paths.get("manual_trajectory_stats") else data["stats"]
+    return {"paths": {k: v.as_posix() for k, v in paths.items()}, "stats": stats}
 
 
 def qa_manual_route(

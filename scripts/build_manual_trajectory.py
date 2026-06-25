@@ -33,6 +33,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--yaw-interpolation", choices=("shortest",), default="shortest")
     parser.add_argument("--insert-rotation-frames", action="store_true")
     parser.add_argument("--rotation-step-deg", type=float, default=10.0)
+    parser.add_argument("--preview-base-image", default=None)
+    parser.add_argument("--preview-metadata", default=None)
+    parser.add_argument("--preview-mode", choices=("auto", "photoreal", "map"), default="auto")
+    parser.add_argument("--preview-stride", type=int, default=10)
+    parser.add_argument("--draw-heading-arrows", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--draw-waypoint-labels", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
 
@@ -196,6 +202,12 @@ def main() -> None:
             yaw_interpolation=args.yaw_interpolation,
             insert_rotation_frames=bool(args.insert_rotation_frames),
             rotation_step_deg=float(args.rotation_step_deg),
+            preview_base_image=args.preview_base_image,
+            preview_metadata=args.preview_metadata,
+            preview_mode=args.preview_mode,
+            preview_stride=int(args.preview_stride),
+            draw_heading_arrows=bool(args.draw_heading_arrows),
+            draw_waypoint_labels=bool(args.draw_waypoint_labels),
         )
     print(json.dumps(result, indent=2, sort_keys=True))
 

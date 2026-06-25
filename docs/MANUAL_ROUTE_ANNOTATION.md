@@ -259,7 +259,7 @@ Manual route outputs:
 
 - `manual_waypoints_image.json`
 - `manual_waypoints_world.json`
-- `manual_route_preview.png`
+- `manual_route_preview.png`: raw user-clicked waypoint pose preview on the original annotation base image.
 - `manual_route_metadata.json`
 
 Build the manual trajectory:
@@ -273,7 +273,12 @@ python scripts/build_manual_trajectory.py \
   --snap-to-traversable \
   --connect-with-astar \
   --yaw-mode annotated \
-  --yaw-interpolation shortest
+  --yaw-interpolation shortest \
+  --preview-base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --preview-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --preview-mode photoreal \
+  --draw-heading-arrows \
+  --draw-waypoint-labels
 ```
 
 Manual trajectory outputs:
@@ -282,7 +287,18 @@ Manual trajectory outputs:
 - `manual_sparse_waypoints.json`
 - `manual_actions.jsonl`
 - `manual_trajectory_stats.json`
-- `manual_trajectory_preview.png`
+- `manual_trajectory_preview_photoreal.png`: final A*/snap/dense trajectory preview over the photoreal topdown annotation base.
+- `manual_trajectory_preview_map.png`: debug map preview only.
+- `manual_trajectory_preview.png`: compatibility copy of the photoreal preview when the photoreal base is available.
+- `manual_trajectory_preview_metadata.json`
+
+Open the photoreal dense preview first:
+
+```bash
+xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_trajectory_preview_photoreal.png"
+```
+
+Use the map/debug preview only to diagnose traversability or snapping; it is not the primary route review image.
 
 `manual_dense_trajectory.jsonl` stores `base_pose_world=[x, y, yaw]` for every frame, plus `yaw_source`, `nearest_manual_waypoint_idx`, `route_source=manual`, and `pose_annotation_mode=position_plus_yaw`. A* connects waypoint positions only; dense trajectory yaw comes from the user-annotated waypoint yaw with shortest-angle interpolation.
 
@@ -293,6 +309,9 @@ python scripts/qa_manual_route.py \
   --manual-route-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
   --manual-trajectory-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender"
+
+python scripts/qa_manual_trajectory_preview.py \
+  --manual-trajectory-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory"
 ```
 
 Replay manual-route RGB-D after the user has saved a manual route:

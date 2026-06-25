@@ -189,10 +189,15 @@ Manual annotation artifacts:
 - `manual_trajectory/manual_sparse_waypoints.json`
 - `manual_trajectory/manual_actions.jsonl`
 - `manual_trajectory/manual_trajectory_stats.json`
+- `manual_trajectory/manual_trajectory_preview_photoreal.png`
+- `manual_trajectory/manual_trajectory_preview_map.png`
 - `manual_trajectory/manual_trajectory_preview.png`
+- `manual_trajectory/manual_trajectory_preview_metadata.json`
 - `manual_route/manual_route_qa.json`
 
 Manual trajectory records must include `pose_annotation_mode=position_plus_yaw`, `yaw_source`, and `nearest_manual_waypoint_idx`. RGB-D replay metadata for user routes must include `uses_manual_yaw=true`; downstream VLM/exploration observations and action labels depend on the user-marked camera yaw, not only the XY path.
+
+`manual_route/manual_route_preview.png` is the raw user-clicked waypoint pose preview. `manual_trajectory/manual_trajectory_preview_photoreal.png` is the final A*/snap/dense trajectory preview over the photoreal topdown annotation image and should be the primary route review artifact. `manual_trajectory/manual_trajectory_preview_map.png` is debug-only.
 
 Generated map, path, image, video, USD, blend, RGB-D, `.npy`, and dataset artifacts remain under `outputs/` or the external Infinigen tree and are not committed. Durable result summaries should be written into docs.
 
@@ -362,12 +367,22 @@ python scripts/build_manual_trajectory.py \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory" \
   --step-size 0.25 \
   --snap-to-traversable \
-  --connect-with-astar
+  --connect-with-astar \
+  --yaw-mode annotated \
+  --yaw-interpolation shortest \
+  --preview-base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --preview-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --preview-mode photoreal \
+  --draw-heading-arrows \
+  --draw-waypoint-labels
 
 python scripts/qa_manual_route.py \
   --manual-route-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
   --manual-trajectory-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender"
+
+python scripts/qa_manual_trajectory_preview.py \
+  --manual-trajectory-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory"
 ```
 
 Replay RGB-D from the user-annotated manual route:

@@ -90,7 +90,7 @@ python scripts/recover_manual_route_autosave.py \
 
 `manual_waypoints_world.json` must exist before building `manual_dense_trajectory.jsonl`. If the check fails, do not run replay; save again or inspect the output directory printed by the annotator.
 
-After annotation, build `manual_trajectory/manual_dense_trajectory.jsonl` with `--yaw-mode annotated --yaw-interpolation shortest` and replay RGB-D from that manual trajectory only. The automatic coverage trajectory is reference-only and must not be used as the data source after a user route has been annotated.
+After annotation, build `manual_trajectory/manual_dense_trajectory.jsonl` with `--yaw-mode annotated --yaw-interpolation shortest` and replay RGB-D from that manual trajectory only. Pass `--preview-base-image manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png`, `--preview-metadata manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json`, and `--preview-mode photoreal` when building the trajectory. `manual_route_preview.png` shows the raw clicked waypoint poses; `manual_trajectory_preview_photoreal.png` shows the final A*/snap/dense trajectory over the same photoreal topdown image. Open `manual_trajectory/manual_trajectory_preview_photoreal.png` for route review. The automatic coverage trajectory is reference-only and must not be used as the data source after a user route has been annotated.
 
 ## Replay Rule
 
