@@ -17,6 +17,8 @@ The automatic `trajectory_usd_blender` output can still be used as a reference t
 
 The semantic floorplan, manual annotation, manual trajectory builder, and replay should all use this same adjusted USD-derived map. Do not use `coarse/scene.blend` for seed 201 manual routes.
 
+Before changing the manual trajectory to avoid new obstacles, first validate the USD-derived obstacle overlay in `docs/USD_OBSTACLE_MAP_ALIGNMENT.md`. The overlay is built from the adjusted USD and drawn on `photoreal_topdown_clean.png`; if it is misaligned, debug transforms, bounds, classification, or footprint rasterization before rebuilding any route.
+
 There are now three manual annotation base-map choices:
 
 - Semantic floorplan: recommended for seeing furniture categories and planning routes.

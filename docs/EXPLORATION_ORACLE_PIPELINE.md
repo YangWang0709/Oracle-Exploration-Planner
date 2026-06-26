@@ -29,6 +29,8 @@ Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 
 Manual route annotation is implemented with `scripts/render_manual_annotation_semantic_floorplan.py`, `scripts/render_manual_annotation_photoreal_topdown_isaac.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. Manual routes are pose routes: every waypoint records adjusted USD world `x`, `y`, and user-annotated `yaw`. Semantic floorplans are best for furniture/category readability, photoreal topdown maps are best for realistic scene appearance review, and geometry footprints are debug-only. The previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
 
+USD obstacle alignment diagnostics are implemented with `scripts/build_usd_obstacle_map.py`, `scripts/render_usd_obstacle_overlay.py`, `scripts/inspect_usd_obstacle_alignment.py`, and `scripts/qa_usd_obstacle_map_alignment.py`. Use `docs/USD_OBSTACLE_MAP_ALIGNMENT.md` to validate adjusted-USD obstacle, inflated obstacle, clearance, bbox, and interactive click overlays against `photoreal_topdown_clean.png` before changing manual trajectory collision logic.
+
 Automatic route generation/review tooling has been removed. The current route-audit workflow is manual route annotation, followed by manual trajectory building, manual replay, and manual replay QA.
 
 The current photometric validation scene is seed 201, documented in
@@ -101,6 +103,7 @@ Current validated seed 201 historical result:
 - No-fill RGB-D smoke test: passed with RGB black-frame ratio `0.0`
 - Automatic path overlay review: deprecated; no longer recommended for route audit
 - Manual route annotation: recommended user route-audit workflow, using semantic floorplan or photoreal orthographic topdown base maps; manual waypoints are `x, y, yaw` poses
+- USD obstacle overlay alignment: required before using `usd_obstacle_map_v1/inflated_obstacle_grid.npy` to rebuild manual trajectories
 - 100-frame no-fill RGB-D pilot: passed QA with RGB/depth/`distance_to_camera` counts `100 / 100 / 100`
 - `photometric_valid_for_training`: `true`
 - `robot_specific_valid_for_training`: `false` until a real robot USD is available
