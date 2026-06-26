@@ -199,8 +199,7 @@ def main() -> None:
         return f"{state['status']} | {dirty} | {saved}\nout: {Path(args.out).resolve()}\n{HELP}"
 
     def add_arrow(u: float, v: float, yaw: float, *, color: str, length: float = 44.0) -> None:
-        hu = float(u) + float(length) * math.cos(float(yaw))
-        hv = float(v) - float(length) * math.sin(float(yaw))
+        hu, hv = image_heading_point_from_yaw(metadata, float(u), float(v), float(yaw), length_px=float(length))
         artists.append(
             ax.annotate(
                 "",

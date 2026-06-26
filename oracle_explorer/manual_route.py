@@ -194,17 +194,45 @@ def yaw_from_world_heading(x: float, y: float, heading_x: float, heading_y: floa
     return normalize_yaw(math.atan2(dy, dx))
 
 
-def yaw_from_image_heading(metadata: dict[str, Any], u: float, v: float, heading_u: float, heading_v: float) -> float:
-    x, y = image_to_world_xy(metadata, float(u), float(v))
+def compute_yaw_from_image_heading(
+    metadata: dict[str, Any],
+    waypoint_u: float,
+    waypoint_v: float,
+    heading_u: float,
+    heading_v: float,
+) -> dict[str, Any]:
+    """Convert image waypoint/heading clicks to world XY before computing yaw."""
+
+    x, y = image_to_world_xy(metadata, float(waypoint_u), float(waypoint_v))
     hx, hy = image_to_world_xy(metadata, float(heading_u), float(heading_v))
-    return yaw_from_world_heading(x, y, hx, hy)
+    yaw = yaw_from_world_heading(x, y, hx, hy)
+    return {
+        "delta_world_xy": [hx - x, hy - y],
+        "heading_image_uv": [float(heading_u), float(heading_v)],
+        "heading_world_xy": [hx, hy],
+        "waypoint_image_uv": [float(waypoint_u), float(waypoint_v)],
+        "waypoint_world_xy": [x, y],
+        "yaw": yaw,
+        "yaw_convention": YAW_CONVENTION,
+        "yaw_deg": yaw_to_deg(yaw),
+    }
+
+
+def yaw_from_image_heading(metadata: dict[str, Any], u: float, v: float, heading_u: float, heading_v: float) -> float:
+    return float(compute_yaw_from_image_heading(metadata, u, v, heading_u, heading_v)["yaw"])
 
 
 def image_heading_point_from_yaw(metadata: dict[str, Any], u: float, v: float, yaw: float, *, length_px: float = 48.0) -> tuple[float, float]:
     x, y = image_to_world_xy(metadata, float(u), float(v))
-    meters = max(float(length_px) * float(metadata.get("meters_per_pixel_x", metadata.get("meters_per_pixel_y", 1.0))), 1e-3)
-    hx = x + meters * math.cos(float(yaw))
-    hy = y + meters * math.sin(float(yaw))
+    world_dx = math.cos(float(yaw))
+    world_dy = math.sin(float(yaw))
+    trial_u, trial_v = world_to_image_uv(metadata, x + world_dx, y + world_dy)
+    pixels_per_meter = math.hypot(trial_u - float(u), trial_v - float(v))
+    if pixels_per_meter <= 1e-9:
+        raise ValueError("Yaw direction cannot be projected into image space.")
+    meters = max(float(length_px) / pixels_per_meter, 1e-6)
+    hx = x + meters * world_dx
+    hy = y + meters * world_dy
     return world_to_image_uv(metadata, hx, hy)
 
 
@@ -307,10 +335,47 @@ def image_waypoints_to_world(
     return world
 
 
+def _image_heading_endpoint_from_yaw(
+    metadata: dict[str, Any] | None,
+    u: float,
+    v: float,
+    yaw: float,
+    *,
+    length_px: float,
+) -> tuple[float, float]:
+    if metadata is None:
+        return (
+            float(u) + float(length_px) * math.cos(float(yaw)),
+            float(v) - float(length_px) * math.sin(float(yaw)),
+        )
+    return image_heading_point_from_yaw(metadata, u, v, yaw, length_px=length_px)
+
+
+def _draw_image_arrow(
+    draw: ImageDraw.ImageDraw,
+    u: float,
+    v: float,
+    end_u: float,
+    end_v: float,
+    *,
+    fill: tuple[int, int, int],
+    width: int,
+    head_len: float,
+) -> None:
+    draw.line((u, v, end_u, end_v), fill=fill, width=width)
+    angle = math.atan2(float(end_v) - float(v), float(end_u) - float(u))
+    for delta in (math.radians(150.0), -math.radians(150.0)):
+        hu = float(end_u) + float(head_len) * math.cos(angle + delta)
+        hv = float(end_v) + float(head_len) * math.sin(angle + delta)
+        draw.line((end_u, end_v, hu, hv), fill=fill, width=width)
+
+
 def preview_manual_route(
     base_image: str | Path,
     image_waypoints: Sequence[dict[str, Any]],
     out_path: str | Path,
+    *,
+    metadata: dict[str, Any] | None = None,
 ) -> Path:
     image = Image.open(base_image).convert("RGB")
     draw = ImageDraw.Draw(image)
@@ -329,9 +394,17 @@ def preview_manual_route(
         yaw = wp.get("yaw")
         if _finite_yaw(yaw):
             arrow_len = 32
-            hu = u + arrow_len * math.cos(float(yaw))
-            hv = v - arrow_len * math.sin(float(yaw))
-            draw.line((u, v, hu, hv), fill=(0, 0, 0), width=3)
+            hu, hv = _image_heading_endpoint_from_yaw(metadata, u, v, float(yaw), length_px=arrow_len)
+            _draw_image_arrow(
+                draw,
+                u,
+                v,
+                hu,
+                hv,
+                fill=(0, 0, 0),
+                width=3,
+                head_len=max(6.0, arrow_len * 0.28),
+            )
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     image.save(out)
@@ -380,17 +453,12 @@ def _draw_heading_arrow(
     *,
     length_px: float,
     fill: tuple[int, int, int],
+    metadata: dict[str, Any] | None = None,
     width: int,
 ) -> None:
-    end_u = float(u) + float(length_px) * math.cos(float(yaw))
-    end_v = float(v) - float(length_px) * math.sin(float(yaw))
-    draw.line((u, v, end_u, end_v), fill=fill, width=width)
+    end_u, end_v = _image_heading_endpoint_from_yaw(metadata, u, v, yaw, length_px=length_px)
     head_len = max(5.0, float(length_px) * 0.28)
-    for delta in (math.radians(150.0), -math.radians(150.0)):
-        angle = float(yaw) + delta
-        hu = end_u + head_len * math.cos(angle)
-        hv = end_v - head_len * math.sin(angle)
-        draw.line((end_u, end_v, hu, hv), fill=fill, width=width)
+    _draw_image_arrow(draw, u, v, end_u, end_v, fill=fill, width=width, head_len=head_len)
 
 
 def render_manual_trajectory_preview_on_base_image(
@@ -537,6 +605,7 @@ def render_manual_trajectory_preview_on_base_image(
                 float(point["yaw"]),
                 length_px=arrow_length,
                 fill=(5, 35, 75),
+                metadata=projected_metadata,
                 width=max(2, path_width - 1),
             )
             heading_arrow_count += 1
@@ -564,6 +633,7 @@ def render_manual_trajectory_preview_on_base_image(
                 float(point["yaw"]),
                 length_px=max(18.0, min(width, height) / 24.0),
                 fill=(0, 0, 0),
+                metadata=projected_metadata,
                 width=max(2, path_width),
             )
             waypoint_heading_arrow_count += 1
@@ -775,6 +845,7 @@ def _manual_route_documents(
         "image_doc": image_doc,
         "metadata": route_metadata,
         "pending_missing_heading": pending_missing_heading,
+        "source_metadata": metadata,
         "warnings": warnings,
         "world_doc": world_doc,
     }
@@ -885,7 +956,7 @@ def save_manual_route_annotation(
     write_json_atomic(paths["manual_waypoints_image"], docs["image_doc"])
     write_json_atomic(paths["manual_waypoints_world"], docs["world_doc"])
     write_json_atomic(paths["manual_route_metadata"], docs["metadata"])
-    preview_manual_route(base_image, docs["full_image_rows"], paths["manual_route_preview"])
+    preview_manual_route(base_image, docs["full_image_rows"], paths["manual_route_preview"], metadata=docs["source_metadata"])
     write_text_atomic(
         paths["saved_ok"],
         _ok_text(
@@ -1009,7 +1080,16 @@ def recover_manual_route_from_autosave(manual_route_dir: str | Path) -> dict[str
     write_json_atomic(target_paths["manual_route_metadata"], metadata_doc)
     base_image = metadata_doc.get("base_image")
     if base_image and Path(base_image).exists():
-        preview_manual_route(base_image, image_doc.get("full_waypoints", []), target_paths["manual_route_preview"])
+        preview_metadata = None
+        preview_metadata_path = metadata_doc.get("preview_metadata") or metadata_doc.get("metadata_path_used")
+        if preview_metadata_path and Path(preview_metadata_path).exists():
+            preview_metadata = read_json(preview_metadata_path)
+        preview_manual_route(
+            base_image,
+            image_doc.get("full_waypoints", []),
+            target_paths["manual_route_preview"],
+            metadata=preview_metadata,
+        )
     write_text_atomic(
         target_paths["saved_ok"],
         _ok_text(

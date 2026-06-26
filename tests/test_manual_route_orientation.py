@@ -10,6 +10,8 @@ from oracle_explorer.grid import save_grid
 from oracle_explorer.io_utils import read_json, write_json, write_jsonl
 from oracle_explorer.manual_route import (
     build_and_write_manual_trajectory,
+    compute_yaw_from_image_heading,
+    image_heading_point_from_yaw,
     image_world_transforms,
     interpolate_yaw,
     normalize_yaw,
@@ -18,6 +20,7 @@ from oracle_explorer.manual_route import (
     yaw_from_image_heading,
     yaw_from_world_heading,
 )
+from oracle_explorer.usd_obstacle_alignment import image_world_transforms_from_axis_mapping
 from scripts.qa_manual_route_replay import run_qa as run_replay_qa
 
 
@@ -107,6 +110,51 @@ def test_image_direction_click_to_yaw() -> None:
 
     assert abs(yaw_from_image_heading(metadata, 50.0, 50.0, 60.0, 50.0)) < 1e-9
     assert abs(yaw_from_image_heading(metadata, 50.0, 50.0, 50.0, 40.0) - math.pi / 2.0) < 1e-9
+
+
+def test_aligned_photoreal_heading_click_uses_world_xy() -> None:
+    metadata = image_world_transforms_from_axis_mapping(
+        {"min_x": 0.0, "min_y": 0.0, "max_x": 10.0, "max_y": 10.0},
+        100,
+        100,
+        u_axis_world=[0.0, -1.0, 0.0],
+        v_axis_world=[1.0, 0.0, 0.0],
+    )
+
+    down = compute_yaw_from_image_heading(metadata, 50.0, 50.0, 50.0, 60.0)
+    right = compute_yaw_from_image_heading(metadata, 50.0, 50.0, 60.0, 50.0)
+    left = compute_yaw_from_image_heading(metadata, 50.0, 50.0, 40.0, 50.0)
+    up = compute_yaw_from_image_heading(metadata, 50.0, 50.0, 50.0, 40.0)
+
+    assert abs(down["yaw"]) < 1e-9
+    assert abs(right["yaw"] + math.pi / 2.0) < 1e-9
+    assert abs(left["yaw"] - math.pi / 2.0) < 1e-9
+    assert abs(abs(up["yaw"]) - math.pi) < 1e-9
+    assert down["delta_world_xy"][0] > 0.0
+    assert abs(down["delta_world_xy"][1]) < 1e-9
+    assert yaw_from_image_heading(metadata, 50.0, 50.0, 60.0, 50.0) == right["yaw"]
+
+
+def test_aligned_photoreal_yaw_preview_endpoint_uses_metadata_axes() -> None:
+    metadata = image_world_transforms_from_axis_mapping(
+        {"min_x": 0.0, "min_y": 0.0, "max_x": 10.0, "max_y": 10.0},
+        100,
+        100,
+        u_axis_world=[0.0, -1.0, 0.0],
+        v_axis_world=[1.0, 0.0, 0.0],
+    )
+
+    u0, v0 = 50.0, 50.0
+    yaw_x_u, yaw_x_v = image_heading_point_from_yaw(metadata, u0, v0, 0.0, length_px=10.0)
+    yaw_neg_y_u, yaw_neg_y_v = image_heading_point_from_yaw(metadata, u0, v0, -math.pi / 2.0, length_px=10.0)
+    yaw_pos_y_u, yaw_pos_y_v = image_heading_point_from_yaw(metadata, u0, v0, math.pi / 2.0, length_px=10.0)
+
+    assert abs(yaw_x_u - u0) < 1e-9
+    assert abs(yaw_x_v - (v0 + 10.0)) < 1e-9
+    assert abs(yaw_neg_y_u - (u0 + 10.0)) < 1e-9
+    assert abs(yaw_neg_y_v - v0) < 1e-9
+    assert abs(yaw_pos_y_u - (u0 - 10.0)) < 1e-9
+    assert abs(yaw_pos_y_v - v0) < 1e-9
 
 
 def test_world_heading_point_to_yaw_and_normalize() -> None:
