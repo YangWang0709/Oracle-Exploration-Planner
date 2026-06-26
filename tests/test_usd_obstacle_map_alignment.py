@@ -61,12 +61,16 @@ def _write_obstacle_map(tmp_path: Path, metadata_path: Path, image_path: Path, *
     obstacle = np.zeros((10, 10), dtype=bool)
     if not empty:
         obstacle[2:4, 2:4] = True
-    clearance, inflated, _ = compute_clearance_and_inflation(obstacle, resolution=1.0, inflation_radius_m=1.0)
+    clearance, debug_inflated, _ = compute_clearance_and_inflation(obstacle, resolution=1.0, inflation_radius_m=1.0)
+    planning_obstacle = obstacle | (clearance <= 0.0)
     free = ~obstacle
     unknown = np.zeros_like(obstacle)
-    planning = free & ~inflated
+    planning = free & ~planning_obstacle
+    np.save(root / "raw_obstacle_grid.npy", obstacle)
     np.save(root / "obstacle_grid.npy", obstacle)
-    np.save(root / "inflated_obstacle_grid.npy", inflated)
+    np.save(root / "planning_obstacle_grid.npy", planning_obstacle)
+    np.save(root / "inflated_obstacle_grid.npy", planning_obstacle)
+    np.save(root / "debug_inflated_obstacle_grid.npy", debug_inflated)
     np.save(root / "free_candidate_grid.npy", free)
     np.save(root / "unknown_grid.npy", unknown)
     np.save(root / "clearance_distance_m.npy", clearance)
@@ -75,9 +79,12 @@ def _write_obstacle_map(tmp_path: Path, metadata_path: Path, image_path: Path, *
         **grid_meta,
         "bounds_source": "photoreal_topdown_metadata_final_bounds",
         "grid_resolution": 1.0,
+        "inflated_obstacle_grid_semantics": "planning_obstacle_grid",
         "image_to_world_transform_from_photoreal": read_json(metadata_path)["image_to_world_transform"],
         "photoreal_base_image": image_path.as_posix(),
         "photoreal_metadata": metadata_path.as_posix(),
+        "planning_inflation_radius_m": 0.0,
+        "debug_inflation_radius_m": 1.0,
         "scene_id": "test_scene",
         "source_of_truth": "usd",
         "used_blend": False,
@@ -179,8 +186,21 @@ def test_overlay_and_manual_trajectory_diagnostic_schema(tmp_path: Path) -> None
     manual_diag = overlay_qa["manual_trajectory_diagnostic"]
 
     assert Path(overlay_qa["outputs"]["photoreal_inflated_obstacles_overlay"]).exists()
+    assert Path(overlay_qa["outputs"]["photoreal_debug_inflated_obstacles_overlay"]).exists()
     assert manual_diag["total_trajectory_points"] == 2
-    assert manual_diag["points_inside_inflated_obstacle"] >= 1
+    assert manual_diag["points_inside_planning_obstacle"] >= 1
+
+
+def test_planning_obstacle_is_smaller_than_debug_inflated(tmp_path: Path) -> None:
+    image, metadata_path, _ = _write_photoreal(tmp_path)
+    root = _write_obstacle_map(tmp_path, metadata_path, image)
+
+    planning = np.load(root / "planning_obstacle_grid.npy", allow_pickle=False)
+    legacy_inflated = np.load(root / "inflated_obstacle_grid.npy", allow_pickle=False)
+    debug_inflated = np.load(root / "debug_inflated_obstacle_grid.npy", allow_pickle=False)
+
+    assert np.array_equal(planning, legacy_inflated)
+    assert int(planning.sum()) < int(debug_inflated.sum())
 
 
 def test_qa_rejects_wrong_bounds_source(tmp_path: Path) -> None:

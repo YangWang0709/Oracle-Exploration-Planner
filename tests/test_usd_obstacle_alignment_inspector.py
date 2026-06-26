@@ -56,22 +56,29 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     grid_meta = make_grid_meta(metadata["world_bounds_xy"], 1.0, (8, 8))
     obstacle = np.zeros((8, 8), dtype=bool)
     obstacle[2:4, 2:4] = True
-    clearance, inflated, _ = compute_clearance_and_inflation(obstacle, resolution=1.0, inflation_radius_m=1.0)
+    clearance, debug_inflated, _ = compute_clearance_and_inflation(obstacle, resolution=1.0, inflation_radius_m=1.0)
+    planning_obstacle = obstacle | (clearance <= 0.0)
+    np.save(root / "raw_obstacle_grid.npy", obstacle)
     np.save(root / "obstacle_grid.npy", obstacle)
-    np.save(root / "inflated_obstacle_grid.npy", inflated)
+    np.save(root / "planning_obstacle_grid.npy", planning_obstacle)
+    np.save(root / "inflated_obstacle_grid.npy", planning_obstacle)
+    np.save(root / "debug_inflated_obstacle_grid.npy", debug_inflated)
     np.save(root / "free_candidate_grid.npy", ~obstacle)
     np.save(root / "unknown_grid.npy", np.zeros_like(obstacle))
     np.save(root / "clearance_distance_m.npy", clearance)
-    np.save(root / "planning_free_grid.npy", ~inflated)
+    np.save(root / "planning_free_grid.npy", ~planning_obstacle)
     write_json(
         root / "usd_obstacle_map_meta.json",
         {
             **grid_meta,
             "bounds_source": "photoreal_topdown_metadata_final_bounds",
             "grid_resolution": 1.0,
+            "inflated_obstacle_grid_semantics": "planning_obstacle_grid",
             "image_to_world_transform_from_photoreal": metadata["image_to_world_transform"],
             "photoreal_base_image": image.as_posix(),
             "photoreal_metadata": metadata_path.as_posix(),
+            "planning_inflation_radius_m": 0.0,
+            "debug_inflation_radius_m": 1.0,
             "scene_id": "inspect_scene",
             "source_of_truth": "usd",
             "used_blend": False,
@@ -122,6 +129,8 @@ def test_inspect_pixel_queries_grid_and_nearest_object(tmp_path: Path) -> None:
     assert record["grid_in_bounds"]
     assert record["raw_obstacle"]
     assert record["inflated_obstacle"]
+    assert record["planning_obstacle"]
+    assert record["debug_inflated_obstacle"]
     assert record["nearest_object"]["name"] == "Shelf"
 
 

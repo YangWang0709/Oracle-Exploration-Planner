@@ -34,6 +34,7 @@ This corrected mapping is written to `usd_obstacle_map_meta.json` as `photoreal_
   --resolution 0.05 \
   --robot-radius-m 0.25 \
   --safety-margin-m 0.10 \
+  --planning-inflation-radius-m 0.05 \
   --min-obstacle-height-m 0.08 \
   --max-floor-height-m 0.20 \
   --ignore-ceiling \
@@ -44,8 +45,11 @@ This corrected mapping is written to `usd_obstacle_map_meta.json` as `photoreal_
 
 Main grid outputs:
 
+- `raw_obstacle_grid.npy`: hard USD obstacle footprints without robot-radius inflation
 - `obstacle_grid.npy`
-- `inflated_obstacle_grid.npy`
+- `planning_obstacle_grid.npy`: raw obstacle with minimal planning inflation, default `0.05m`
+- `inflated_obstacle_grid.npy`: compatibility alias for `planning_obstacle_grid.npy`
+- `debug_inflated_obstacle_grid.npy`: conservative debug-only safety inflation, default `robot_radius_m + safety_margin_m = 0.35m`
 - `free_candidate_grid.npy`
 - `unknown_grid.npy`
 - `clearance_distance_m.npy`
@@ -59,6 +63,8 @@ Main grid outputs:
 Debug map outputs:
 
 - `debug_obstacle_map.png`
+- `debug_raw_obstacle_map.png`
+- `debug_planning_obstacle_map.png`
 - `debug_inflated_obstacle_map.png`
 - `debug_clearance_map.png`
 - `debug_object_footprints.png`
@@ -66,7 +72,9 @@ Debug map outputs:
 Photoreal overlays are written under `usd_obstacle_map_v1/overlays/`:
 
 - `photoreal_obstacles_overlay.png`
-- `photoreal_inflated_obstacles_overlay.png`
+- `photoreal_planning_obstacles_overlay.png`
+- `photoreal_inflated_obstacles_overlay.png`, compatibility alias for planning obstacles
+- `photoreal_debug_inflated_obstacles_overlay.png`
 - `photoreal_clearance_overlay.png`
 - `photoreal_object_bbox_overlay.png`
 - `photoreal_alignment_grid_overlay.png`
@@ -89,7 +97,13 @@ Open this first:
 xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1/overlays/photoreal_inflated_obstacles_overlay.png"
 ```
 
-The inflated obstacle overlay should sit on top of walls, furniture, cabinets, shelves, tables, beds, sofas, chairs, counters, kitchen islands, sinks, toilets, and other base-blocking scene objects. It should not be offset from the photoreal furniture or walls.
+The default inflated overlay is now the planning obstacle mask, not the conservative safety mask. It should sit on top of walls, furniture, cabinets, shelves, tables, beds, sofas, chairs, counters, kitchen islands, sinks, toilets, and other base-blocking scene objects without sealing normal doors and narrow passages.
+
+Open the conservative debug-only safety boundary separately:
+
+```bash
+xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1/overlays/photoreal_debug_inflated_obstacles_overlay.png"
+```
 
 ## Interactive Inspection
 
@@ -106,7 +120,8 @@ python scripts/inspect_usd_obstacle_alignment.py \
 The inspector writes static images before opening the GUI:
 
 - `alignment_static_raw_obstacles.png`
-- `alignment_static_inflated_obstacles.png`
+- `alignment_static_inflated_obstacles.png`, planning obstacle layer
+- `alignment_static_debug_inflated_obstacles.png`, conservative debug-only layer
 - `alignment_static_bboxes.png`
 - `alignment_static_grid_axes.png`
 - `alignment_static_checkerboard.png`
@@ -122,7 +137,8 @@ In the GUI, click representative points:
 Use these keys:
 
 - `o`: raw obstacle overlay
-- `i`: inflated obstacle overlay
+- `i`: planning obstacle overlay
+- `d`: debug inflated obstacle overlay
 - `c`: clearance heatmap
 - `b`: object bbox/footprint overlay
 - `g` or `x`: world grid/axes
@@ -186,6 +202,6 @@ If the overlay is misaligned, do not rerun or modify the manual trajectory yet. 
 
 Only after the user confirms the USD obstacle overlay is aligned should the next stage update `scripts/build_manual_trajectory.py` to use:
 
-`outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1/inflated_obstacle_grid.npy`
+`outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1/planning_obstacle_grid.npy`
 
-as the collision map for manual trajectory building. That route change is intentionally not part of this alignment stage.
+as the collision map for manual trajectory building. `debug_inflated_obstacle_grid.npy` is for clearance warnings and visual QA only. That route change is intentionally not part of this alignment stage.

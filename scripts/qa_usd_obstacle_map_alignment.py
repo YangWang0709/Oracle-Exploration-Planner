@@ -31,7 +31,9 @@ from oracle_explorer.usd_obstacle_alignment import (
 
 REQUIRED_OVERLAYS = (
     "photoreal_obstacles_overlay.png",
+    "photoreal_planning_obstacles_overlay.png",
     "photoreal_inflated_obstacles_overlay.png",
+    "photoreal_debug_inflated_obstacles_overlay.png",
     "photoreal_clearance_overlay.png",
     "photoreal_object_bbox_overlay.png",
     "photoreal_alignment_grid_overlay.png",
@@ -39,6 +41,7 @@ REQUIRED_OVERLAYS = (
 STATIC_ALIGNMENT_IMAGES = (
     "alignment_static_raw_obstacles.png",
     "alignment_static_inflated_obstacles.png",
+    "alignment_static_debug_inflated_obstacles.png",
     "alignment_static_bboxes.png",
     "alignment_static_grid_axes.png",
     "alignment_static_checkerboard.png",
@@ -149,7 +152,10 @@ def run_qa(
 
     required_files = (
         "obstacle_grid.npy",
+        "raw_obstacle_grid.npy",
+        "planning_obstacle_grid.npy",
         "inflated_obstacle_grid.npy",
+        "debug_inflated_obstacle_grid.npy",
         "clearance_distance_m.npy",
         "free_candidate_grid.npy",
         "unknown_grid.npy",
@@ -189,6 +195,10 @@ def run_qa(
             failures.append("metadata missing world_to_grid_transform")
         if not matrix_shape_ok(meta.get("grid_to_world_transform")):
             failures.append("metadata missing grid_to_world_transform")
+        if meta.get("inflated_obstacle_grid_semantics") != "planning_obstacle_grid":
+            failures.append(
+                f"metadata inflated_obstacle_grid_semantics is not planning_obstacle_grid: {meta.get('inflated_obstacle_grid_semantics')!r}"
+            )
 
     if metadata_path.exists():
         photoreal_meta = read_json(metadata_path)
@@ -196,17 +206,23 @@ def run_qa(
     try:
         bundle = load_obstacle_bundle(root)
         obstacle = bundle["obstacle_grid"]
+        planning = bundle["planning_obstacle_grid"]
         inflated = bundle["inflated_obstacle_grid"]
+        debug_inflated = bundle["debug_inflated_obstacle_grid"]
         free = bundle["free_candidate_grid"]
         clearance = bundle["clearance_distance_m"]
-        if obstacle.shape != inflated.shape or obstacle.shape != clearance.shape:
-            failures.append("obstacle, inflated, and clearance grids do not share shape")
+        if obstacle.shape != planning.shape or obstacle.shape != inflated.shape or obstacle.shape != debug_inflated.shape or obstacle.shape != clearance.shape:
+            failures.append("obstacle, planning, debug inflated, and clearance grids do not share shape")
         if not obstacle.any():
             failures.append("obstacle grid is empty")
-        if not inflated.any():
-            failures.append("inflated obstacle grid is empty")
+        if not planning.any():
+            failures.append("planning obstacle grid is empty")
+        if not debug_inflated.any():
+            failures.append("debug inflated obstacle grid is empty")
         if not free.any():
             failures.append("free candidate grid is empty")
+        if int(planning.sum()) > int(debug_inflated.sum()):
+            failures.append("planning obstacle grid has more occupied cells than debug inflated grid")
         if not np.isfinite(clearance[np.isfinite(clearance)]).all():
             failures.append("clearance grid contains invalid finite values")
         grid_roundtrip = _roundtrip_grid_check(bundle["meta"])
@@ -244,6 +260,8 @@ def run_qa(
         for key in ("total_trajectory_points", "points_inside_obstacle", "points_inside_inflated_obstacle"):
             if key not in manual_diag and not manual_diag.get("warning"):
                 failures.append(f"manual trajectory diagnostic missing {key}")
+        if "points_inside_planning_obstacle" not in manual_diag and not manual_diag.get("warning"):
+            warnings.append("manual trajectory diagnostic missing points_inside_planning_obstacle; using legacy inflated count")
 
     inspection = _inspection_summary(root, warnings, failures)
 
@@ -259,6 +277,8 @@ def run_qa(
         "photoreal_image": image_path.as_posix(),
         "photoreal_metadata": metadata_path.as_posix(),
         "photoreal_obstacle_alignment_axis_preset": meta.get("photoreal_obstacle_alignment_axis_preset"),
+        "planning_inflation_radius_m": meta.get("planning_inflation_radius_m"),
+        "debug_inflation_radius_m": meta.get("debug_inflation_radius_m"),
         "uses_obstacle_alignment_transform": bool(matrix_shape_ok(meta.get("photoreal_obstacle_alignment_world_to_image_transform"))),
         "warnings": warnings,
     }

@@ -56,6 +56,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resolution", type=float, default=0.05)
     parser.add_argument("--robot-radius-m", type=float, default=0.25)
     parser.add_argument("--safety-margin-m", type=float, default=0.10)
+    parser.add_argument(
+        "--planning-inflation-radius-m",
+        type=float,
+        default=0.05,
+        help="Minimal inflation used by planning_obstacle_grid.npy; keep small to avoid sealing doors.",
+    )
+    parser.add_argument(
+        "--debug-inflation-radius-m",
+        type=float,
+        default=None,
+        help="Conservative debug-only inflation. Defaults to robot_radius_m + safety_margin_m.",
+    )
     parser.add_argument("--min-obstacle-height-m", type=float, default=0.08)
     parser.add_argument("--max-floor-height-m", type=float, default=0.20)
     parser.add_argument("--wall-thickness-m", type=float, default=0.10)
@@ -481,22 +493,31 @@ def build_usd_obstacle_map(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     free_candidate_grid &= ~obstacle_grid
-    inflation_radius = float(args.robot_radius_m) + float(args.safety_margin_m)
-    clearance, inflated_obstacle_grid, clearance_stats = compute_clearance_and_inflation(
+    planning_inflation_radius = max(0.0, float(args.planning_inflation_radius_m))
+    debug_inflation_radius = (
+        max(0.0, float(args.debug_inflation_radius_m))
+        if args.debug_inflation_radius_m is not None
+        else max(0.0, float(args.robot_radius_m) + float(args.safety_margin_m))
+    )
+    clearance, debug_inflated_obstacle_grid, clearance_stats = compute_clearance_and_inflation(
         obstacle_grid,
         resolution=float(args.resolution),
-        inflation_radius_m=inflation_radius,
+        inflation_radius_m=debug_inflation_radius,
     )
+    planning_obstacle_grid = obstacle_grid | (clearance <= planning_inflation_radius)
     if free_candidate_grid.any():
-        planning_free_grid = free_candidate_grid & ~inflated_obstacle_grid
-        planning_free_source = "free_candidate_minus_inflated_obstacles"
+        planning_free_grid = free_candidate_grid & ~planning_obstacle_grid
+        planning_free_source = "free_candidate_minus_planning_obstacles"
     else:
-        planning_free_grid = ~inflated_obstacle_grid
-        planning_free_source = "fallback_all_non_inflated_cells_no_floor_candidates"
+        planning_free_grid = ~planning_obstacle_grid
+        planning_free_source = "fallback_all_non_planning_obstacle_cells_no_floor_candidates"
 
     out = ensure_dir(args.out)
+    np.save(out / "raw_obstacle_grid.npy", obstacle_grid)
     np.save(out / "obstacle_grid.npy", obstacle_grid)
-    np.save(out / "inflated_obstacle_grid.npy", inflated_obstacle_grid)
+    np.save(out / "planning_obstacle_grid.npy", planning_obstacle_grid)
+    np.save(out / "inflated_obstacle_grid.npy", planning_obstacle_grid)
+    np.save(out / "debug_inflated_obstacle_grid.npy", debug_inflated_obstacle_grid)
     np.save(out / "free_candidate_grid.npy", free_candidate_grid)
     np.save(out / "unknown_grid.npy", unknown_grid)
     np.save(out / "clearance_distance_m.npy", clearance)
@@ -534,6 +555,10 @@ def build_usd_obstacle_map(args: argparse.Namespace) -> dict[str, Any]:
         "free_candidate_cells": int(free_candidate_grid.sum()),
         "grid_resolution": float(args.resolution),
         "image_axis_mapping": alignment.get("image_axis_mapping"),
+        "debug_inflated_obstacle_cells": int(debug_inflated_obstacle_grid.sum()),
+        "debug_inflated_obstacle_grid_semantics": "debug_only_conservative_safety_boundary",
+        "debug_inflated_obstacle_path": "debug_inflated_obstacle_grid.npy",
+        "debug_inflation_radius_m": debug_inflation_radius,
         "ignored_object_count": summary["ignored_object_count"],
         "image_to_world_transform_from_photoreal": photoreal_metadata.get("image_to_world_transform")
         or photoreal_metadata.get("image_to_world"),
@@ -543,16 +568,24 @@ def build_usd_obstacle_map(args: argparse.Namespace) -> dict[str, Any]:
         "photoreal_obstacle_alignment_meters_per_pixel_x": alignment.get("meters_per_pixel_x"),
         "photoreal_obstacle_alignment_meters_per_pixel_y": alignment.get("meters_per_pixel_y"),
         "photoreal_obstacle_alignment_world_to_image_transform": alignment.get("world_to_image_transform"),
-        "inflated_obstacle_cells": int(inflated_obstacle_grid.sum()),
-        "inflation_radius_m": inflation_radius,
+        "inflated_obstacle_cells": int(planning_obstacle_grid.sum()),
+        "inflated_obstacle_grid_semantics": "planning_obstacle_grid",
+        "inflation_radius_m": planning_inflation_radius,
         "min_obstacle_height_m": float(args.min_obstacle_height_m),
         "object_summary": summary,
         "obstacle_cells": int(obstacle_grid.sum()),
         "obstacle_object_count": summary["obstacle_object_count"],
         "photoreal_base_image": photoreal_image.as_posix(),
         "photoreal_metadata": photoreal_metadata_path.as_posix(),
+        "planning_inflation_radius_m": planning_inflation_radius,
+        "planning_obstacle_cells": int(planning_obstacle_grid.sum()),
+        "planning_obstacle_grid_semantics": "raw_obstacle_grid inflated only by planning_inflation_radius_m",
+        "planning_obstacle_path": "planning_obstacle_grid.npy",
         "planning_free_cells": int(planning_free_grid.sum()),
         "planning_free_source": planning_free_source,
+        "raw_obstacle_cells": int(obstacle_grid.sum()),
+        "raw_obstacle_grid_semantics": "USD-derived hard obstacle footprint without robot-radius inflation",
+        "raw_obstacle_path": "raw_obstacle_grid.npy",
         "robot_radius_m": float(args.robot_radius_m),
         "safety_margin_m": float(args.safety_margin_m),
         "scene_id": str(args.scene_id),
@@ -570,8 +603,10 @@ def build_usd_obstacle_map(args: argparse.Namespace) -> dict[str, Any]:
     write_json(out / "usd_obstacle_unknown_objects.json", unknown_objects)
     write_json(out / "usd_obstacle_bounds_debug.json", bounds_debug)
 
+    save_mask_debug_png(out / "debug_raw_obstacle_map.png", obstacle_grid, color=(210, 50, 55))
     save_mask_debug_png(out / "debug_obstacle_map.png", obstacle_grid, color=(210, 50, 55))
-    save_mask_debug_png(out / "debug_inflated_obstacle_map.png", inflated_obstacle_grid, color=(245, 130, 35))
+    save_mask_debug_png(out / "debug_planning_obstacle_map.png", planning_obstacle_grid, color=(245, 130, 35))
+    save_mask_debug_png(out / "debug_inflated_obstacle_map.png", debug_inflated_obstacle_grid, color=(160, 70, 220))
     save_clearance_debug_png(out / "debug_clearance_map.png", clearance)
     save_object_footprints_debug_png(out / "debug_object_footprints.png", free_candidate_grid, obstacle_grid, unknown_grid)
 
@@ -585,13 +620,15 @@ def build_usd_obstacle_map(args: argparse.Namespace) -> dict[str, Any]:
             "debug_inflated_obstacle_map": (out / "debug_inflated_obstacle_map.png").as_posix(),
             "debug_object_footprints": (out / "debug_object_footprints.png").as_posix(),
             "debug_obstacle_map": (out / "debug_obstacle_map.png").as_posix(),
+            "debug_planning_obstacle_map": (out / "debug_planning_obstacle_map.png").as_posix(),
+            "debug_raw_obstacle_map": (out / "debug_raw_obstacle_map.png").as_posix(),
         },
         "grid_size": [int(shape[0]), int(shape[1])],
         "import_route": import_route,
         "object_summary": summary,
         "out": out.as_posix(),
         "overlay_summary": overlay_summary,
-        "passed_basic_qa": bool(obstacle_grid.any() and inflated_obstacle_grid.any() and planning_free_grid.any()),
+        "passed_basic_qa": bool(obstacle_grid.any() and planning_obstacle_grid.any() and planning_free_grid.any()),
         "scene_usd": scene_usd.as_posix(),
     }
     return result

@@ -654,13 +654,30 @@ def save_object_footprints_debug_png(
 
 def load_obstacle_bundle(obstacle_map_dir: str | Path) -> dict[str, Any]:
     root = Path(obstacle_map_dir)
+    raw_path = root / "raw_obstacle_grid.npy"
+    planning_path = root / "planning_obstacle_grid.npy"
+    debug_inflated_path = root / "debug_inflated_obstacle_grid.npy"
+    legacy_obstacle_path = root / "obstacle_grid.npy"
+    legacy_inflated_path = root / "inflated_obstacle_grid.npy"
+    raw_obstacle = np.load(raw_path if raw_path.exists() else legacy_obstacle_path, allow_pickle=False).astype(bool)
+    planning_obstacle = np.load(
+        planning_path if planning_path.exists() else legacy_inflated_path,
+        allow_pickle=False,
+    ).astype(bool)
+    debug_inflated = np.load(
+        debug_inflated_path if debug_inflated_path.exists() else legacy_inflated_path,
+        allow_pickle=False,
+    ).astype(bool)
     bundle = {
         "clearance_distance_m": np.load(root / "clearance_distance_m.npy", allow_pickle=False),
         "free_candidate_grid": np.load(root / "free_candidate_grid.npy", allow_pickle=False).astype(bool),
-        "inflated_obstacle_grid": np.load(root / "inflated_obstacle_grid.npy", allow_pickle=False).astype(bool),
+        "debug_inflated_obstacle_grid": debug_inflated,
+        "inflated_obstacle_grid": planning_obstacle,
         "meta": read_json(root / "usd_obstacle_map_meta.json"),
-        "obstacle_grid": np.load(root / "obstacle_grid.npy", allow_pickle=False).astype(bool),
+        "obstacle_grid": raw_obstacle,
         "obstacle_map_dir": root,
+        "planning_obstacle_grid": planning_obstacle,
+        "raw_obstacle_grid": raw_obstacle,
         "unknown_grid": np.load(root / "unknown_grid.npy", allow_pickle=False).astype(bool),
     }
     planning = root / "planning_free_grid.npy"
@@ -902,8 +919,14 @@ def render_overlay_set(
     metadata_for_alignment = obstacle_alignment_metadata(metadata, bundle)
     grid_meta = _grid_meta_from_bundle(bundle)
 
-    raw_img_mask = grid_mask_to_image_mask(bundle["obstacle_grid"], grid_meta, metadata_for_alignment, image_shape)
-    inflated_img_mask = grid_mask_to_image_mask(bundle["inflated_obstacle_grid"], grid_meta, metadata_for_alignment, image_shape)
+    raw_img_mask = grid_mask_to_image_mask(bundle["raw_obstacle_grid"], grid_meta, metadata_for_alignment, image_shape)
+    planning_img_mask = grid_mask_to_image_mask(bundle["planning_obstacle_grid"], grid_meta, metadata_for_alignment, image_shape)
+    debug_inflated_img_mask = grid_mask_to_image_mask(
+        bundle["debug_inflated_obstacle_grid"],
+        grid_meta,
+        metadata_for_alignment,
+        image_shape,
+    )
     clearance_img = grid_values_to_image(
         bundle["clearance_distance_m"].astype(np.float32),
         grid_meta,
@@ -917,9 +940,17 @@ def render_overlay_set(
         out / "photoreal_obstacles_overlay.png",
         overlay_mask_on_image(base, raw_img_mask, color=(220, 25, 45), alpha=0.38),
     ).as_posix()
+    paths["photoreal_planning_obstacles_overlay"] = _save_rgba(
+        out / "photoreal_planning_obstacles_overlay.png",
+        overlay_mask_on_image(base, planning_img_mask, color=(255, 125, 20), alpha=0.32),
+    ).as_posix()
     paths["photoreal_inflated_obstacles_overlay"] = _save_rgba(
         out / "photoreal_inflated_obstacles_overlay.png",
-        overlay_mask_on_image(base, inflated_img_mask, color=(255, 125, 20), alpha=0.36),
+        overlay_mask_on_image(base, planning_img_mask, color=(255, 125, 20), alpha=0.32),
+    ).as_posix()
+    paths["photoreal_debug_inflated_obstacles_overlay"] = _save_rgba(
+        out / "photoreal_debug_inflated_obstacles_overlay.png",
+        overlay_mask_on_image(base, debug_inflated_img_mask, color=(160, 70, 220), alpha=0.30),
     ).as_posix()
     paths["photoreal_clearance_overlay"] = _save_rgba(
         out / "photoreal_clearance_overlay.png",
@@ -944,9 +975,11 @@ def render_overlay_set(
         "generated_at": utc_now_iso(),
         "image_shape": [int(v) for v in image_shape],
         "manual_trajectory_diagnostic": manual_diag,
+        "debug_inflated_image_pixels": int(debug_inflated_img_mask.sum()),
         "obstacle_image_pixels": int(raw_img_mask.sum()),
         "obstacle_map_dir": root.as_posix(),
         "outputs": paths,
+        "planning_obstacle_image_pixels": int(planning_img_mask.sum()),
         "photoreal_image": image_path.as_posix(),
         "photoreal_metadata": metadata_path.as_posix(),
         "uses_obstacle_alignment_transform_override": bool(metadata_for_alignment.get("obstacle_alignment_transform_override")),
@@ -990,8 +1023,8 @@ def render_manual_trajectory_collision_diagnostic(
     raw_hits: list[dict[str, Any]] = []
     inflated_hits: list[dict[str, Any]] = []
     points_uv: list[tuple[float, float]] = []
-    inflated = np.asarray(bundle["inflated_obstacle_grid"], dtype=bool)
-    raw = np.asarray(bundle["obstacle_grid"], dtype=bool)
+    planning = np.asarray(bundle["planning_obstacle_grid"], dtype=bool)
+    raw = np.asarray(bundle["raw_obstacle_grid"], dtype=bool)
     for idx, row in enumerate(rows):
         xy = _trajectory_world_xy(row)
         if xy is None:
@@ -1004,11 +1037,11 @@ def render_manual_trajectory_collision_diagnostic(
             hit_base = {"frame_idx": int(row.get("frame_idx", idx)), "grid_rc": [int(rr), int(cc)], "world_xy": [x, y]}
             if bool(raw[rr, cc]):
                 raw_hits.append(hit_base)
-            if bool(inflated[rr, cc]):
+            if bool(planning[rr, cc]):
                 inflated_hits.append(hit_base)
 
     image_shape = (base.size[1], base.size[0])
-    inflated_img_mask = grid_mask_to_image_mask(inflated, grid_meta, photoreal_metadata, image_shape)
+    inflated_img_mask = grid_mask_to_image_mask(planning, grid_meta, photoreal_metadata, image_shape)
     overlay = overlay_mask_on_image(base, inflated_img_mask, color=(255, 120, 20), alpha=0.28)
     draw = ImageDraw.Draw(overlay, "RGBA")
     if len(points_uv) > 1:
@@ -1028,6 +1061,7 @@ def render_manual_trajectory_collision_diagnostic(
         "manual_trajectory": trajectory_path.as_posix(),
         "overlay_path": overlay_path.as_posix(),
         "points_inside_inflated_obstacle": int(len(inflated_hits)),
+        "points_inside_planning_obstacle": int(len(inflated_hits)),
         "points_inside_obstacle": int(len(raw_hits)),
         "total_trajectory_points": int(len(rows)),
     }
@@ -1130,12 +1164,14 @@ def inspect_pixel(
     result = {
         "clearance_m": None,
         "free_candidate": False,
+        "debug_inflated_obstacle": False,
         "grid_in_bounds": bool(in_grid),
         "grid_rc": [int(row), int(col)],
         "inflated_obstacle": False,
         "nearest_object": nearest[0] if nearest else None,
         "nearest_objects": nearest,
         "pixel_uv": [u, v],
+        "planning_obstacle": False,
         "raw_obstacle": False,
         "world_xy": [x, y],
     }
@@ -1143,8 +1179,10 @@ def inspect_pixel(
         result.update(
             {
                 "clearance_m": float(np.asarray(bundle["clearance_distance_m"])[row, col]),
+                "debug_inflated_obstacle": bool(np.asarray(bundle["debug_inflated_obstacle_grid"], dtype=bool)[row, col]),
                 "free_candidate": bool(np.asarray(bundle["free_candidate_grid"], dtype=bool)[row, col]),
-                "inflated_obstacle": bool(np.asarray(bundle["inflated_obstacle_grid"], dtype=bool)[row, col]),
+                "inflated_obstacle": bool(np.asarray(bundle["planning_obstacle_grid"], dtype=bool)[row, col]),
+                "planning_obstacle": bool(np.asarray(bundle["planning_obstacle_grid"], dtype=bool)[row, col]),
                 "raw_obstacle": bool(raw[row, col]),
             }
         )
@@ -1258,6 +1296,8 @@ def write_inspection_outputs(
                 "col",
                 "raw_obstacle",
                 "inflated_obstacle",
+                "planning_obstacle",
+                "debug_inflated_obstacle",
                 "free_candidate",
                 "clearance_m",
                 "nearest_object_name",
@@ -1277,6 +1317,8 @@ def write_inspection_outputs(
                     "free_candidate": point.get("free_candidate"),
                     "idx": point.get("idx"),
                     "inflated_obstacle": point.get("inflated_obstacle"),
+                    "debug_inflated_obstacle": point.get("debug_inflated_obstacle"),
+                    "planning_obstacle": point.get("planning_obstacle", point.get("inflated_obstacle")),
                     "nearest_object_class": nearest.get("class"),
                     "nearest_object_distance_m": nearest.get("distance_to_object_m"),
                     "nearest_object_name": nearest.get("name"),
@@ -1349,6 +1391,7 @@ def compose_alignment_overlay(
     *,
     raw: bool = True,
     inflated: bool = True,
+    debug_inflated: bool = False,
     bboxes: bool = True,
     grid: bool = False,
     clearance: bool = False,
@@ -1368,11 +1411,14 @@ def compose_alignment_overlay(
         )
         out = overlay_clearance_on_image(out, clearance_img, alpha=alpha)
     if raw:
-        mask = grid_mask_to_image_mask(bundle["obstacle_grid"], grid_meta, photoreal_metadata, image_shape)
+        mask = grid_mask_to_image_mask(bundle["raw_obstacle_grid"], grid_meta, photoreal_metadata, image_shape)
         out = overlay_mask_on_image(out, mask, color=(220, 25, 45), alpha=alpha)
     if inflated:
-        mask = grid_mask_to_image_mask(bundle["inflated_obstacle_grid"], grid_meta, photoreal_metadata, image_shape)
+        mask = grid_mask_to_image_mask(bundle["planning_obstacle_grid"], grid_meta, photoreal_metadata, image_shape)
         out = overlay_mask_on_image(out, mask, color=(255, 125, 20), alpha=max(0.12, alpha * 0.8))
+    if debug_inflated:
+        mask = grid_mask_to_image_mask(bundle["debug_inflated_obstacle_grid"], grid_meta, photoreal_metadata, image_shape)
+        out = overlay_mask_on_image(out, mask, color=(160, 70, 220), alpha=max(0.12, alpha * 0.8))
     if bboxes:
         out = draw_object_overlays(out, photoreal_metadata, bundle.get("objects", []), max_objects=500, labels=False)
     if grid:
@@ -1399,6 +1445,19 @@ def render_alignment_static_images(
         "alignment_static_inflated_obstacles": _save_rgba(
             out / "alignment_static_inflated_obstacles.png",
             compose_alignment_overlay(base, metadata, bundle, raw=False, inflated=True, bboxes=False, alpha=0.38),
+        ).as_posix(),
+        "alignment_static_debug_inflated_obstacles": _save_rgba(
+            out / "alignment_static_debug_inflated_obstacles.png",
+            compose_alignment_overlay(
+                base,
+                metadata,
+                bundle,
+                raw=False,
+                inflated=False,
+                debug_inflated=True,
+                bboxes=False,
+                alpha=0.35,
+            ),
         ).as_posix(),
         "alignment_static_bboxes": _save_rgba(
             out / "alignment_static_bboxes.png",

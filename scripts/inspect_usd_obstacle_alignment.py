@@ -31,8 +31,8 @@ from oracle_explorer.usd_obstacle_alignment import (
 
 HELP_TEXT = """\
 Keys:
-  o raw obstacles   i inflated obstacles   c clearance   b bboxes/footprints
-  g grid            x world axes/grid      +/- alpha
+  o raw obstacles   i planning obstacles   d debug inflated   c clearance
+  b bboxes          g grid/world axes      x grid/world axes   +/- alpha
   1 inspect only    2 aligned              3 misaligned  4 uncertain
   n note last       u undo last            s save        q save+quit
   Q autosave+quit   h help
@@ -69,8 +69,8 @@ def _status_line(record: dict[str, Any]) -> str:
     return (
         f"pixel=({record['pixel_uv'][0]:.1f},{record['pixel_uv'][1]:.1f}) "
         f"world=({record['world_xy'][0]:.3f},{record['world_xy'][1]:.3f}) "
-        f"grid={record['grid_rc']} raw={record['raw_obstacle']} inflated={record['inflated_obstacle']} "
-        f"free={record['free_candidate']} clearance={clearance_text} "
+        f"grid={record['grid_rc']} raw={record['raw_obstacle']} planning={record.get('planning_obstacle', record['inflated_obstacle'])} "
+        f"debug_inflated={record.get('debug_inflated_obstacle')} free={record['free_candidate']} clearance={clearance_text} "
         f"nearest={nearest.get('name')} class={nearest.get('class')} dist={nearest.get('distance_to_object_m')}"
     )
 
@@ -134,6 +134,7 @@ def _try_matplotlib_gui(
         "alpha": 0.35,
         "bboxes": True,
         "clearance": False,
+        "debug_inflated": False,
         "grid": False,
         "inflated": True,
         "judgement": "inspect_only",
@@ -151,6 +152,7 @@ def _try_matplotlib_gui(
             bundle,
             raw=state["raw"],
             inflated=state["inflated"],
+            debug_inflated=state["debug_inflated"],
             bboxes=state["bboxes"],
             grid=state["grid"],
             clearance=state["clearance"],
@@ -178,6 +180,8 @@ def _try_matplotlib_gui(
             state["inflated"] = not state["inflated"]
         elif key == "c":
             state["clearance"] = not state["clearance"]
+        elif key == "d":
+            state["debug_inflated"] = not state["debug_inflated"]
         elif key == "b":
             state["bboxes"] = not state["bboxes"]
         elif key in {"g", "x"}:
@@ -237,6 +241,7 @@ def _tkinter_gui(
         "alpha": 0.35,
         "bboxes": True,
         "clearance": False,
+        "debug_inflated": False,
         "grid": False,
         "inflated": True,
         "judgement": "inspect_only",
@@ -258,6 +263,7 @@ def _tkinter_gui(
             bundle,
             raw=state["raw"],
             inflated=state["inflated"],
+            debug_inflated=state["debug_inflated"],
             bboxes=state["bboxes"],
             grid=state["grid"],
             clearance=state["clearance"],
@@ -286,6 +292,8 @@ def _tkinter_gui(
             state["inflated"] = not state["inflated"]
         elif key_value == "c":
             state["clearance"] = not state["clearance"]
+        elif key_value == "d":
+            state["debug_inflated"] = not state["debug_inflated"]
         elif key_value == "b":
             state["bboxes"] = not state["bboxes"]
         elif key_value in {"g", "x"}:
