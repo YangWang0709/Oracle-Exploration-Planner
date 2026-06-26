@@ -29,6 +29,22 @@ from oracle_explorer.sensors.pointcloud import depth_to_pointcloud
 
 
 REQUIRED_SLAM_TOPICS = ["/clock", "/tf", "/tf_static", "/odom", "/scan"]
+TF_STATIC_QOS_PROFILES = """- history: 1
+  depth: 1
+  reliability: 1
+  durability: 1
+  lifespan:
+    sec: 0
+    nsec: 0
+  deadline:
+    sec: 0
+    nsec: 0
+  liveliness: 0
+  liveliness_lease_duration:
+    sec: 0
+    nsec: 0
+  avoid_ros_namespace_conventions: false
+"""
 
 
 def _timestamp_ns(seconds: float) -> int:
@@ -129,6 +145,13 @@ def _topic_types(
     if write_depth_points:
         mapping["/camera/depth/points"] = "sensor_msgs/msg/PointCloud2"
     return mapping
+
+
+def _topic_metadata(rosbag2_py: Any, *, topic: str, msg_type: str, topic_tf_static: str) -> Any:
+    kwargs = {"name": topic, "type": msg_type, "serialization_format": "cdr"}
+    if topic == topic_tf_static:
+        kwargs["offered_qos_profiles"] = TF_STATIC_QOS_PROFILES
+    return rosbag2_py.TopicMetadata(**kwargs)
 
 
 def _build_velocity(rows: list[dict[str, Any]], idx: int) -> tuple[float, float]:
@@ -333,7 +356,7 @@ def export_dataset_to_rosbag2(
             rosbag2_py.ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr"),
         )
         for topic, msg_type in plan["message_types"].items():
-            writer.create_topic(rosbag2_py.TopicMetadata(name=topic, type=msg_type, serialization_format="cdr"))
+            writer.create_topic(_topic_metadata(rosbag2_py, topic=topic, msg_type=msg_type, topic_tf_static=topic_tf_static))
 
         topic_counts = {topic: 0 for topic in plan["message_types"]}
         scans_for_summary: list[dict[str, Any]] = []
@@ -430,13 +453,15 @@ def export_dataset_to_rosbag2(
         }
         write_json(debug_dir / "scan_summary.json", scan_summary)
         write_json(debug_dir / "topic_counts.json", topic_counts)
+        writer.close()
+        metadata_yaml = bag_path / "metadata.yaml"
         metadata.update(
             {
                 "bag_path": bag_path.as_posix(),
                 "failure_reason": None,
-                "metadata_yaml": (bag_path / "metadata.yaml").as_posix(),
+                "metadata_yaml": metadata_yaml.as_posix(),
                 "scan_summary": scan_summary,
-                "success": bool((bag_path / "metadata.yaml").exists()),
+                "success": bool(metadata_yaml.exists() and metadata_yaml.stat().st_size > 0),
                 "topic_message_counts": topic_counts,
             }
         )

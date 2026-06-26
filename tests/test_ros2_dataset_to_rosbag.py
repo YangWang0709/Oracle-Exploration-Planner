@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from oracle_explorer.io_utils import write_json, write_jsonl
-from oracle_explorer.ros2.dataset_to_rosbag import REQUIRED_SLAM_TOPICS, build_rosbag_export_plan
+from oracle_explorer.ros2.dataset_to_rosbag import REQUIRED_SLAM_TOPICS, TF_STATIC_QOS_PROFILES, build_rosbag_export_plan
 from oracle_explorer.ros2.messages import yaw_to_quaternion_xyzw
 
 
@@ -100,3 +100,8 @@ def test_yaw_quaternion_is_z_axis_rotation() -> None:
     assert qy == 0.0
     assert abs(qz - 1.0) < 1e-6
     assert abs(qw) < 1e-6
+
+
+def test_tf_static_qos_is_transient_local_for_slam_toolbox() -> None:
+    assert "durability: 1" in TF_STATIC_QOS_PROFILES
+    assert "reliability: 1" in TF_STATIC_QOS_PROFILES

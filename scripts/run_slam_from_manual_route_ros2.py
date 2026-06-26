@@ -102,14 +102,31 @@ def _map_files(map_name: str | Path) -> tuple[Path, Path]:
     return base.with_suffix(".pgm"), base.with_suffix(".yaml")
 
 
-def _run_command(cmd: list[str], *, timeout: float, log: list[str]) -> subprocess.CompletedProcess[str]:
-    log.append("$ " + " ".join(cmd))
+def _command_string(cmd: list[str] | None) -> str | None:
+    return " ".join(cmd) if cmd else None
+
+
+def _append_log(log_path: Path, text: str) -> None:
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(text.rstrip() + "\n")
+
+
+def _run_command(cmd: list[str], *, timeout: float, log_path: Path | None = None, log: list[str] | None = None) -> subprocess.CompletedProcess[str]:
+    line = "$ " + " ".join(cmd)
+    if log is not None:
+        log.append(line)
+    if log_path is not None:
+        _append_log(log_path, line)
     result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=timeout)
-    log.append(f"returncode={result.returncode}")
+    chunks = [f"returncode={result.returncode}"]
     if result.stdout:
-        log.append("[stdout]\n" + result.stdout)
+        chunks.append("[stdout]\n" + result.stdout.rstrip())
     if result.stderr:
-        log.append("[stderr]\n" + result.stderr)
+        chunks.append("[stderr]\n" + result.stderr.rstrip())
+    if log is not None:
+        log.extend(chunks)
+    if log_path is not None:
+        _append_log(log_path, "\n".join(chunks))
     return result
 
 
@@ -137,16 +154,67 @@ def _stop_process(proc: subprocess.Popen[str] | None) -> None:
                 pass
 
 
-def _save_map(map_name: Path, *, timeout: float, log: list[str]) -> str | None:
+def _topic_names() -> set[str]:
     ros2 = shutil.which("ros2")
     if not ros2:
-        return "ros2 executable not found"
+        return set()
+    try:
+        result = subprocess.run([ros2, "topic", "list"], check=False, capture_output=True, text=True, timeout=5)
+    except Exception:
+        return set()
+    if result.returncode != 0:
+        return set()
+    return set(result.stdout.split())
+
+
+def _wait_for_topics(topics: list[str], *, timeout: float, log_path: Path, stage: str) -> bool:
+    deadline = time.time() + float(timeout)
+    missing = list(topics)
+    while time.time() < deadline:
+        available = _topic_names()
+        missing = [topic for topic in topics if topic not in available]
+        if not missing:
+            _append_log(log_path, f"[stage] {stage} topics observed: {', '.join(topics)}")
+            return True
+        time.sleep(0.5)
+    _append_log(log_path, f"[stage] {stage} topic wait timed out; missing={missing}")
+    return False
+
+
+def _prepare_slam_params(args: argparse.Namespace, out: Path) -> Path:
+    target = out / "slam_toolbox_params.yaml"
+    if args.slam_params:
+        source = Path(args.slam_params)
+        if not source.exists():
+            raise FileNotFoundError(f"slam params file does not exist: {source}")
+        if source.resolve() != target.resolve():
+            shutil.copy2(source, target)
+        return target
+    _write_slam_params(target, use_sim_time=bool(args.use_sim_time))
+    return target
+
+
+def _save_map(map_name: Path, *, timeout: float, log_path: Path, use_sim_time: bool) -> dict[str, Any]:
+    ros2 = shutil.which("ros2")
+    if not ros2:
+        return {"command": None, "failure_reason": "ros2 executable not found", "success": False}
+
+    if _ros_pkg_available("nav2_map_server"):
+        cmd = [ros2, "run", "nav2_map_server", "map_saver_cli", "-f", map_name.as_posix(), "--ros-args", "-p", f"use_sim_time:={str(bool(use_sim_time)).lower()}"]
+        try:
+            result = _run_command(cmd, timeout=timeout, log_path=log_path)
+            pgm, yaml = _map_files(map_name)
+            if result.returncode == 0 and pgm.exists() and yaml.exists():
+                return {"command": _command_string(cmd), "failure_reason": None, "success": True}
+            return {"command": _command_string(cmd), "failure_reason": f"nav2_map_server map_saver_cli failed with returncode {result.returncode}", "success": False}
+        except Exception as exc:
+            return {"command": _command_string(cmd), "failure_reason": f"nav2_map_server map_saver_cli failed: {type(exc).__name__}: {exc}", "success": False}
 
     try:
-        services = _run_command([ros2, "service", "list", "-t"], timeout=10, log=log)
+        services = _run_command([ros2, "service", "list", "-t"], timeout=10, log_path=log_path)
     except Exception as exc:
         services = None
-        log.append(f"service list failed: {type(exc).__name__}: {exc}")
+        _append_log(log_path, f"service list failed: {type(exc).__name__}: {exc}")
     if services and "slam_toolbox/srv/SaveMap" in (services.stdout + services.stderr):
         service_name = "/slam_toolbox/save_map"
         for line in services.stdout.splitlines():
@@ -154,24 +222,18 @@ def _save_map(map_name: Path, *, timeout: float, log: list[str]) -> str | None:
                 service_name = line.split()[0]
                 break
         request = "{name: {data: '" + map_name.as_posix() + "'}}"
+        cmd = [ros2, "service", "call", service_name, "slam_toolbox/srv/SaveMap", request]
         try:
-            result = _run_command([ros2, "service", "call", service_name, "slam_toolbox/srv/SaveMap", request], timeout=timeout, log=log)
+            result = _run_command(cmd, timeout=timeout, log_path=log_path)
             pgm, yaml = _map_files(map_name)
             if result.returncode == 0 and pgm.exists() and yaml.exists():
-                return None
+                return {"command": _command_string(cmd), "failure_reason": None, "success": True}
+            return {"command": _command_string(cmd), "failure_reason": f"slam_toolbox SaveMap failed with returncode {result.returncode}", "success": False}
         except Exception as exc:
-            log.append(f"slam_toolbox SaveMap call failed: {type(exc).__name__}: {exc}")
+            _append_log(log_path, f"slam_toolbox SaveMap call failed: {type(exc).__name__}: {exc}")
+            return {"command": _command_string(cmd), "failure_reason": f"slam_toolbox SaveMap call failed: {type(exc).__name__}: {exc}", "success": False}
 
-    if _ros_pkg_available("nav2_map_server"):
-        try:
-            result = _run_command([ros2, "run", "nav2_map_server", "map_saver_cli", "-f", map_name.as_posix()], timeout=timeout, log=log)
-            pgm, yaml = _map_files(map_name)
-            if result.returncode == 0 and pgm.exists() and yaml.exists():
-                return None
-            return f"nav2_map_server map_saver_cli failed with returncode {result.returncode}"
-        except Exception as exc:
-            return f"nav2_map_server map_saver_cli failed: {type(exc).__name__}: {exc}"
-    return "No supported map saver available; install nav2_map_server or expose slam_toolbox SaveMap service."
+    return {"command": None, "failure_reason": "save_map_service_not_available", "success": False}
 
 
 def build_slam_metadata(args: argparse.Namespace) -> dict[str, Any]:
@@ -182,38 +244,85 @@ def build_slam_metadata(args: argparse.Namespace) -> dict[str, Any]:
     topics: list[str] = []
     topic_counts: dict[str, int] = {}
     failure_reason = None
+    failure_stage = None
     if bag_path and (bag_path / "metadata.yaml").exists():
         bag_meta = read_rosbag_metadata(bag_path)
         topics = bag_meta["topics"]
         topic_counts = bag_meta["message_counts"]
     elif bag_path:
         failure_reason = f"rosbag metadata.yaml missing: {bag_path / 'metadata.yaml'}"
+        failure_stage = "preflight"
     else:
         failure_reason = "rosbag_not_found"
+        failure_stage = "preflight"
 
     if _arg(args, "slam_backend", "slam_toolbox") == "slam_toolbox" and not _ros_pkg_available("slam_toolbox"):
-        failure_reason = failure_reason or "slam_toolbox_not_installed"
+        if not failure_reason:
+            failure_reason = "slam_toolbox_not_installed"
+            failure_stage = "preflight"
     missing_topics = [topic for topic in REQUIRED_SLAM_TOPICS if topic not in topics]
     if not failure_reason and missing_topics:
         failure_reason = f"required_topics_missing: {missing_topics}"
+        failure_stage = "preflight"
+    zero_count_topics = [topic for topic in REQUIRED_SLAM_TOPICS if topic in topics and int(topic_counts.get(topic, 0)) <= 0]
+    if not failure_reason and zero_count_topics:
+        failure_reason = f"required_topic_counts_zero: {zero_count_topics}"
+        failure_stage = "preflight"
     if _arg(args, "dry_run", False) and not failure_reason:
         failure_reason = "dry_run_only"
+        failure_stage = "preflight"
     if not _arg(args, "run", False) and not _arg(args, "dry_run", False) and not failure_reason:
         failure_reason = "run_not_requested"
+        failure_stage = "preflight"
 
     map_name = Path(_arg(args, "map_name") or (out / "map"))
     map_pgm, map_yaml = _map_files(map_name)
+    params_path = Path(_arg(args, "slam_params")) if _arg(args, "slam_params") else out / "slam_toolbox_params.yaml"
+    ros2 = shutil.which("ros2") or "ros2"
+    slam_cmd = [
+        ros2,
+        "launch",
+        "slam_toolbox",
+        "online_async_launch.py",
+        f"slam_params_file:={(out / 'slam_toolbox_params.yaml').as_posix()}",
+        f"use_sim_time:={str(bool(_arg(args, 'use_sim_time', False))).lower()}",
+    ]
+    bag_cmd = None
+    if bag_path:
+        bag_cmd = [ros2, "bag", "play", bag_path.as_posix(), "--rate", str(float(_arg(args, "rosbag_play_rate", 1.0)))]
+        bag_cmd.extend(["--topics", *REQUIRED_SLAM_TOPICS])
+        if _arg(args, "use_sim_time", False):
+            bag_cmd.append("--clock")
+    save_cmd = [
+        ros2,
+        "run",
+        "nav2_map_server",
+        "map_saver_cli",
+        "-f",
+        map_name.as_posix(),
+        "--ros-args",
+        "-p",
+        f"use_sim_time:={str(bool(_arg(args, 'use_sim_time', False))).lower()}",
+    ]
     metadata = {
+        "commands": {
+            "bag_play": _command_string(bag_cmd),
+            "save_map": _command_string(save_cmd),
+            "slam_toolbox": _command_string(slam_cmd),
+        },
         "dry_run": bool(_arg(args, "dry_run", False)),
+        "failure_stage": failure_stage,
         "failure_reason": failure_reason,
         "input_rosbag": bag_path.as_posix() if bag_path else None,
         "map_output": {"map_pgm": map_pgm.as_posix(), "map_yaml": map_yaml.as_posix()},
         "odometry_source": "manual_trajectory_ground_truth",
+        "params_input": params_path.as_posix() if params_path else None,
         "ros_environment": env,
         "slam_backend": _arg(args, "slam_backend", "slam_toolbox"),
         "success": False,
         "topic_message_counts": topic_counts,
         "topics_available": topics,
+        "topics_required": REQUIRED_SLAM_TOPICS,
         "topics_used": REQUIRED_SLAM_TOPICS,
         "use_sim_time": bool(_arg(args, "use_sim_time", False)),
     }
@@ -234,34 +343,51 @@ def run_slam(args: argparse.Namespace) -> dict[str, Any]:
     log_path = out / "slam_run.log"
     log_path.write_text("", encoding="utf-8")
     metadata = build_slam_metadata(args)
+    _append_log(log_path, "[stage] preflight start")
+    _append_log(log_path, f"input_rosbag={metadata.get('input_rosbag')}")
+    _append_log(log_path, f"map_pgm={metadata['map_output']['map_pgm']}")
+    _append_log(log_path, f"map_yaml={metadata['map_output']['map_yaml']}")
+    _append_log(log_path, f"slam_toolbox command: {metadata['commands']['slam_toolbox']}")
+    _append_log(log_path, f"ros2 bag play command: {metadata['commands']['bag_play']}")
+    _append_log(log_path, f"map save command: {metadata['commands']['save_map']}")
     if metadata["failure_reason"]:
-        log_path.write_text(f"Preflight failed: {metadata['failure_reason']}\n", encoding="utf-8")
+        _append_log(log_path, f"[stage] preflight failed: {metadata['failure_reason']}")
         return metadata
+    _append_log(log_path, "[stage] preflight ok")
     if not args.run:
+        metadata["failure_stage"] = "preflight"
         metadata["failure_reason"] = "run_not_requested"
         write_json(out / "slam_metadata.json", metadata)
         return metadata
 
     ros2 = shutil.which("ros2")
     if not ros2:
+        metadata["failure_stage"] = "preflight"
         metadata["failure_reason"] = "ros2 executable not found"
         write_json(out / "slam_metadata.json", metadata)
         return metadata
 
-    params_path = Path(args.slam_params) if args.slam_params else out / "slam_toolbox_params.yaml"
-    if not Path(params_path).exists():
-        _write_slam_params(Path(params_path), use_sim_time=bool(args.use_sim_time))
-    else:
-        shutil.copy2(params_path, out / "slam_toolbox_params.yaml")
-        params_path = out / "slam_toolbox_params.yaml"
+    try:
+        params_path = _prepare_slam_params(args, out)
+    except Exception as exc:
+        metadata["failure_stage"] = "preflight"
+        metadata["failure_reason"] = f"{type(exc).__name__}: {exc}"
+        write_json(out / "slam_metadata.json", metadata)
+        _append_log(log_path, f"[stage] preflight failed: {metadata['failure_reason']}")
+        return metadata
 
     map_name = Path(args.map_name or (out / "map"))
     map_name.parent.mkdir(parents=True, exist_ok=True)
     map_pgm, map_yaml = _map_files(map_name)
+    for stale in (map_pgm, map_yaml):
+        if stale.exists():
+            stale.unlink()
+            _append_log(log_path, f"[stage] removed stale map file: {stale}")
     slam_proc: subprocess.Popen[str] | None = None
     bag_proc: subprocess.Popen[str] | None = None
-    command_log: list[str] = []
     failure_reason = None
+    failure_stage = None
+    save_result: dict[str, Any] = {"command": metadata["commands"]["save_map"], "failure_reason": None, "success": False}
     try:
         launch_cmd = [
             ros2,
@@ -271,34 +397,58 @@ def run_slam(args: argparse.Namespace) -> dict[str, Any]:
             f"slam_params_file:={params_path.as_posix()}",
             f"use_sim_time:={str(bool(args.use_sim_time)).lower()}",
         ]
+        metadata["commands"]["slam_toolbox"] = _command_string(launch_cmd)
         slam_proc = _start_process(launch_cmd, log_path)
+        _append_log(log_path, f"[stage] slam_toolbox started pid={slam_proc.pid}")
         time.sleep(5.0)
         if slam_proc.poll() is not None:
+            failure_stage = "start_slam_toolbox"
             failure_reason = f"slam_toolbox exited early with returncode {slam_proc.returncode}"
         else:
             bag_cmd = [ros2, "bag", "play", metadata["input_rosbag"], "--rate", str(float(args.rosbag_play_rate))]
+            bag_cmd.extend(["--topics", *REQUIRED_SLAM_TOPICS])
             if args.use_sim_time:
                 bag_cmd.append("--clock")
+            metadata["commands"]["bag_play"] = _command_string(bag_cmd)
             bag_proc = _start_process(bag_cmd, log_path)
+            _append_log(log_path, f"[stage] bag play started pid={bag_proc.pid}")
+            _wait_for_topics(["/scan", "/tf", "/odom"], timeout=20.0, log_path=log_path, stage="wait_for_topics")
             try:
                 bag_proc.wait(timeout=float(args.timeout_sec))
+                _append_log(log_path, f"[stage] bag play finished returncode={bag_proc.returncode}")
+                if bag_proc.returncode not in (0, None):
+                    failure_stage = "play_bag"
+                    failure_reason = f"ros2 bag play failed with returncode {bag_proc.returncode}"
             except subprocess.TimeoutExpired:
+                failure_stage = "timeout"
                 failure_reason = f"ros2 bag play timed out after {args.timeout_sec}s"
             time.sleep(3.0)
+            if not failure_reason and not _wait_for_topics(["/map"], timeout=30.0, log_path=log_path, stage="wait_for_map"):
+                failure_stage = "wait_for_topics"
+                failure_reason = "map topic /map not observed"
             if not failure_reason and args.save_map:
-                failure_reason = _save_map(map_name, timeout=60.0, log=command_log)
+                _append_log(log_path, "[stage] saving map...")
+                save_result = _save_map(map_name, timeout=60.0, log_path=log_path, use_sim_time=bool(args.use_sim_time))
+                metadata["commands"]["save_map"] = save_result.get("command")
+                if save_result.get("success"):
+                    _append_log(log_path, "[stage] map saved")
+                else:
+                    failure_stage = "save_map"
+                    failure_reason = str(save_result.get("failure_reason") or "save_map_failed")
             elif not args.save_map:
+                failure_stage = "save_map"
                 failure_reason = "save_map_not_requested"
     finally:
         _stop_process(bag_proc)
         _stop_process(slam_proc)
-        if command_log:
-            with log_path.open("a", encoding="utf-8") as f:
-                f.write("\n".join(command_log) + "\n")
+        _append_log(log_path, "[stage] child processes cleaned up")
 
     map_exists = map_pgm.exists() and map_pgm.stat().st_size > 0 and map_yaml.exists() and map_yaml.stat().st_size > 0
+    if not map_exists and not failure_stage:
+        failure_stage = "map_files_missing"
     metadata.update(
         {
+            "failure_stage": None if map_exists else (failure_stage or "map_files_missing"),
             "failure_reason": None if map_exists else (failure_reason or "map_files_missing"),
             "map_output": {"map_pgm": map_pgm.as_posix(), "map_yaml": map_yaml.as_posix()},
             "slam_params": params_path.as_posix(),
