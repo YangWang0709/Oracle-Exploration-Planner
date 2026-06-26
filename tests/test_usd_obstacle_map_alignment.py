@@ -8,6 +8,7 @@ from PIL import Image
 from oracle_explorer.io_utils import read_json, write_json, write_jsonl
 from oracle_explorer.manual_route import image_world_transforms
 from oracle_explorer.usd_obstacle_alignment import (
+    alignment_transform_for_metadata,
     compute_clearance_and_inflation,
     grid_rc_to_world,
     make_grid_meta,
@@ -137,6 +138,24 @@ def test_world_grid_and_world_image_roundtrip(tmp_path: Path) -> None:
     assert abs(y - 3.25) < 0.26
     assert 0.0 <= u <= 100.0
     assert 0.0 <= v <= 100.0
+
+
+def test_isaac_topdown_axis_preset_swaps_xy_for_photoreal_alignment(tmp_path: Path) -> None:
+    _, _, metadata = _write_photoreal(tmp_path)
+
+    alignment = alignment_transform_for_metadata(metadata, "isaac_topdown_y_left_x_down")
+    world_to_image = alignment["world_to_image_transform"]
+
+    center_u, center_v = (np.asarray(world_to_image) @ np.asarray([5.0, 5.0, 1.0]))[:2]
+    less_y_u, less_y_v = (np.asarray(world_to_image) @ np.asarray([5.0, 4.0, 1.0]))[:2]
+    more_x_u, more_x_v = (np.asarray(world_to_image) @ np.asarray([6.0, 5.0, 1.0]))[:2]
+
+    assert abs(center_u - 50.0) < 1e-9
+    assert abs(center_v - 50.0) < 1e-9
+    assert less_y_u > center_u
+    assert abs(less_y_v - center_v) < 1e-9
+    assert more_x_v > center_v
+    assert abs(more_x_u - center_u) < 1e-9
 
 
 def test_bbox_rasterization_inflation_and_clearance_are_valid() -> None:

@@ -22,6 +22,7 @@ from oracle_explorer.usd_obstacle_alignment import (
     grid_rc_to_world,
     load_obstacle_bundle,
     matrix_shape_ok,
+    obstacle_alignment_metadata,
     photoreal_image_shape,
     world_to_grid_rc,
     world_to_image_uv,
@@ -182,6 +183,8 @@ def run_qa(
             failures.append("metadata photoreal_metadata does not match QA argument")
         if not matrix_shape_ok(meta.get("world_to_image_transform_from_photoreal")):
             failures.append("metadata missing world_to_image_transform_from_photoreal")
+        if not matrix_shape_ok(meta.get("photoreal_obstacle_alignment_world_to_image_transform")):
+            warnings.append("metadata missing photoreal_obstacle_alignment_world_to_image_transform; using raw photoreal transform")
         if not matrix_shape_ok(meta.get("world_to_grid_transform")):
             failures.append("metadata missing world_to_grid_transform")
         if not matrix_shape_ok(meta.get("grid_to_world_transform")):
@@ -210,9 +213,10 @@ def run_qa(
         if not grid_roundtrip["passed"]:
             failures.append(f"grid roundtrip failed: {grid_roundtrip}")
         if photoreal_meta and image_path.exists():
+            photoreal_for_alignment = obstacle_alignment_metadata(photoreal_meta, bundle)
             with Image.open(image_path) as image:
-                image_shape = photoreal_image_shape(photoreal_meta, image)
-            obstacle_projection = _sample_obstacle_projection_check(obstacle, bundle["meta"], photoreal_meta, image_shape)
+                image_shape = photoreal_image_shape(photoreal_for_alignment, image)
+            obstacle_projection = _sample_obstacle_projection_check(obstacle, bundle["meta"], photoreal_for_alignment, image_shape)
             if not obstacle_projection["passed"]:
                 failures.append(f"sample obstacle center projection leaves image bounds: {obstacle_projection}")
     except Exception as exc:
@@ -254,6 +258,8 @@ def run_qa(
         "passed": not failures,
         "photoreal_image": image_path.as_posix(),
         "photoreal_metadata": metadata_path.as_posix(),
+        "photoreal_obstacle_alignment_axis_preset": meta.get("photoreal_obstacle_alignment_axis_preset"),
+        "uses_obstacle_alignment_transform": bool(matrix_shape_ok(meta.get("photoreal_obstacle_alignment_world_to_image_transform"))),
         "warnings": warnings,
     }
     write_json(root / "usd_obstacle_map_alignment_qa.json", summary)

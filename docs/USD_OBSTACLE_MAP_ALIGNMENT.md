@@ -15,6 +15,14 @@ Do not use this step to regenerate routes. The only route diagnostic here is a r
 
 The obstacle grid uses `photoreal_topdown_metadata.json` `final_world_bounds_xy` and reuses its `world_to_image_transform` for every overlay. It does not compute a separate image transform.
 
+For the current seed 201 Isaac photoreal topdown render, the image axes are not the original `+X -> u, +Y -> up` metadata assumption. Obstacle overlays use the explicit `isaac_topdown_y_left_x_down` axis preset:
+
+- image `+u` follows world `-Y`
+- image `+v` follows world `+X`
+- camera forward is recorded as world `-Z`
+
+This corrected mapping is written to `usd_obstacle_map_meta.json` as `photoreal_obstacle_alignment_world_to_image_transform` and is used by overlays, QA, and the interactive inspector.
+
 ## Build
 
 ```bash
@@ -30,6 +38,7 @@ The obstacle grid uses `photoreal_topdown_metadata.json` `final_world_bounds_xy`
   --max-floor-height-m 0.20 \
   --ignore-ceiling \
   --ignore-lights-cameras \
+  --image-axis-preset isaac_topdown_y_left_x_down \
   --draw-debug
 ```
 
@@ -62,6 +71,17 @@ Photoreal overlays are written under `usd_obstacle_map_v1/overlays/`:
 - `photoreal_object_bbox_overlay.png`
 - `photoreal_alignment_grid_overlay.png`
 - `photoreal_manual_trajectory_vs_obstacle_overlay.png`, if `manual_trajectory/manual_dense_trajectory.jsonl` exists
+
+To regenerate overlays without rebuilding USD geometry:
+
+```bash
+python scripts/render_usd_obstacle_overlay.py \
+  --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
+  --photoreal-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --photoreal-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1/overlays" \
+  --image-axis-preset isaac_topdown_y_left_x_down
+```
 
 Open this first:
 

@@ -37,6 +37,11 @@ from oracle_explorer.usd_geometry import (
     final_annotation_bounds,
     xy_bounds_dict,
 )
+from oracle_explorer.usd_obstacle_alignment import (
+    AXIS_MAPPING_PRESETS,
+    axis_mapping_preset,
+    image_world_transforms_from_axis_mapping,
+)
 from replay_path_collect_rgbd_isaac import (
     _frame_value_is_nonempty,
     _import_isaac_runtime,
@@ -60,6 +65,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start", nargs=3, type=float, metavar=("X", "Y", "YAW"), default=None)
     parser.add_argument("--strict-orthographic", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--camera-height-margin", type=float, default=None)
+    parser.add_argument(
+        "--image-axis-preset",
+        choices=sorted(AXIS_MAPPING_PRESETS),
+        default="isaac_topdown_y_left_x_down",
+        help="World/image axis mapping written into photoreal metadata.",
+    )
     parser.add_argument("--add-diagnostic-light", action="store_true")
     parser.add_argument("--fail-on-dark", action="store_true")
     parser.add_argument("--min-rgb-mean-brightness", type=float, default=5.0)
@@ -330,7 +341,30 @@ def render_photoreal_topdown(args: argparse.Namespace) -> dict[str, Any]:
         bounds_report = compute_usd_visible_scene_bounds_xy(stage)
         raw_bounds = bounds_report["raw_usd_world_bounds"]
         bounds = final_annotation_bounds(raw_bounds, map_bounds_xy, margin_m=float(args.margin_m), aspect=aspect)
-        transforms = image_world_transforms(bounds, int(args.render_width), int(args.render_height))
+        if args.image_axis_preset == "metadata":
+            transforms = image_world_transforms(bounds, int(args.render_width), int(args.render_height))
+            camera_axes_world = None
+            image_axis_mapping = transforms.get("image_axis_mapping")
+        else:
+            bounds_xy_for_axes = xy_bounds_dict(
+                bounds["bounds_min_xy"][0],
+                bounds["bounds_min_xy"][1],
+                bounds["bounds_max_xy"][0],
+                bounds["bounds_max_xy"][1],
+            )
+            preset = axis_mapping_preset(str(args.image_axis_preset))
+            transforms = image_world_transforms_from_axis_mapping(
+                bounds_xy_for_axes,
+                int(args.render_width),
+                int(args.render_height),
+                u_axis_world=preset["u_axis_world"],
+                v_axis_world=preset["v_axis_world"],
+            )
+            camera_axes_world = preset.get("camera_axes_world")
+            image_axis_mapping = {
+                **transforms["image_axis_mapping"],
+                "camera_forward_world": (camera_axes_world or {}).get("forward"),
+            }
         final_bounds_xy = transforms["world_bounds_xy"]
         raw_xy = xy_bounds_dict(raw_bounds["min_x"], raw_bounds["min_y"], raw_bounds["max_x"], raw_bounds["max_y"])
         bounds_report = {
@@ -402,6 +436,7 @@ def render_photoreal_topdown(args: argparse.Namespace) -> dict[str, Any]:
             "add_diagnostic_light": bool(args.add_diagnostic_light),
             "base_map_type": "photoreal_topdown_orthographic",
             "bounds_source": "usd_stage_visible_geometry_bounds",
+            "camera_axes_world": camera_axes_world,
             "camera_height_m": float(camera_height),
             "camera_height_margin_m": float(camera_height_margin),
             "camera_pose_world": camera_info["camera_pose_world"],
@@ -410,6 +445,8 @@ def render_photoreal_topdown(args: argparse.Namespace) -> dict[str, Any]:
             "coordinate_convention": COORDINATE_CONVENTION,
             "diagnostic_light": diagnostic_light,
             "final_world_bounds_xy": final_bounds_xy,
+            "image_axis_mapping": image_axis_mapping,
+            "image_axis_preset": str(args.image_axis_preset),
             "image_type": "photoreal_topdown_clean",
             "image_to_world_transform": transforms["image_to_world_transform"],
             "manual_annotation_valid": True,
@@ -461,9 +498,12 @@ def render_photoreal_topdown(args: argparse.Namespace) -> dict[str, Any]:
         camera_debug = {
             "bounds_report": bounds_report,
             "camera": camera_info,
+            "camera_axes_world": camera_axes_world,
             "camera_height_margin_m": float(camera_height_margin),
             "final_contains_map_bounds": bounds_contains_xy(final_bounds_xy, map_bounds_xy),
             "final_contains_raw_usd_bounds": bounds_contains_xy(final_bounds_xy, raw_xy),
+            "image_axis_mapping": image_axis_mapping,
+            "image_axis_preset": str(args.image_axis_preset),
             "image_to_world_transform": transforms["image_to_world_transform"],
             "map_bounds_world_xy": map_bounds_xy,
             "raw_usd_bounds_xy": raw_xy,

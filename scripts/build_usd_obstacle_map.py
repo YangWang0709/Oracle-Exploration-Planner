@@ -24,6 +24,8 @@ from oracle_explorer.object_classification import (
     classify_object,
 )
 from oracle_explorer.usd_obstacle_alignment import (
+    AXIS_MAPPING_PRESETS,
+    alignment_transform_for_metadata,
     bbox_footprint_xy,
     compute_clearance_and_inflation,
     convex_hull_xy,
@@ -60,6 +62,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ignore-ceiling", action="store_true")
     parser.add_argument("--ignore-lights-cameras", action="store_true")
     parser.add_argument("--draw-debug", action="store_true")
+    parser.add_argument(
+        "--image-axis-preset",
+        choices=sorted(AXIS_MAPPING_PRESETS),
+        default="isaac_topdown_y_left_x_down",
+        help="World/image axis mapping used for photoreal obstacle overlays.",
+    )
     return parser.parse_args(argv)
 
 
@@ -377,6 +385,7 @@ def build_usd_obstacle_map(args: argparse.Namespace) -> dict[str, Any]:
         raise FileNotFoundError(f"scene USD does not exist: {scene_usd}")
     photoreal_metadata_path = Path(args.photoreal_metadata)
     photoreal_metadata = read_json(photoreal_metadata_path)
+    alignment = alignment_transform_for_metadata(photoreal_metadata, str(args.image_axis_preset))
     world_bounds_xy = photoreal_world_bounds(photoreal_metadata)
     grid_meta = make_grid_meta(world_bounds_xy, float(args.resolution))
     shape = (int(grid_meta["height"]), int(grid_meta["width"]))
@@ -521,11 +530,19 @@ def build_usd_obstacle_map(args: argparse.Namespace) -> dict[str, Any]:
         **grid_meta,
         "bounds_source": "photoreal_topdown_metadata_final_bounds",
         "clearance_stats": clearance_stats,
+        "camera_axes_world": alignment.get("camera_axes_world"),
         "free_candidate_cells": int(free_candidate_grid.sum()),
         "grid_resolution": float(args.resolution),
+        "image_axis_mapping": alignment.get("image_axis_mapping"),
         "ignored_object_count": summary["ignored_object_count"],
         "image_to_world_transform_from_photoreal": photoreal_metadata.get("image_to_world_transform")
         or photoreal_metadata.get("image_to_world"),
+        "photoreal_obstacle_alignment_axis_preset": alignment.get("axis_mapping_preset"),
+        "photoreal_obstacle_alignment_axis_preset_description": alignment.get("axis_mapping_description"),
+        "photoreal_obstacle_alignment_image_to_world_transform": alignment.get("image_to_world_transform"),
+        "photoreal_obstacle_alignment_meters_per_pixel_x": alignment.get("meters_per_pixel_x"),
+        "photoreal_obstacle_alignment_meters_per_pixel_y": alignment.get("meters_per_pixel_y"),
+        "photoreal_obstacle_alignment_world_to_image_transform": alignment.get("world_to_image_transform"),
         "inflated_obstacle_cells": int(inflated_obstacle_grid.sum()),
         "inflation_radius_m": inflation_radius,
         "min_obstacle_height_m": float(args.min_obstacle_height_m),

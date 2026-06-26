@@ -8,6 +8,7 @@ from PIL import Image
 from oracle_explorer.io_utils import read_json, write_json
 from oracle_explorer.manual_route import image_world_transforms
 from oracle_explorer.usd_obstacle_alignment import (
+    alignment_transform_for_metadata,
     compute_clearance_and_inflation,
     default_inspection_doc,
     inspect_pixel,
@@ -122,6 +123,30 @@ def test_inspect_pixel_queries_grid_and_nearest_object(tmp_path: Path) -> None:
     assert record["raw_obstacle"]
     assert record["inflated_obstacle"]
     assert record["nearest_object"]["name"] == "Shelf"
+
+
+def test_inspect_pixel_uses_obstacle_alignment_transform_override(tmp_path: Path) -> None:
+    root, _, metadata_path = _fixture(tmp_path)
+    metadata = read_json(metadata_path)
+    alignment = alignment_transform_for_metadata(metadata, "isaac_topdown_y_left_x_down")
+    meta = read_json(root / "usd_obstacle_map_meta.json")
+    meta.update(
+        {
+            "camera_axes_world": alignment["camera_axes_world"],
+            "image_axis_mapping": alignment["image_axis_mapping"],
+            "photoreal_obstacle_alignment_axis_preset": alignment["axis_mapping_preset"],
+            "photoreal_obstacle_alignment_image_to_world_transform": alignment["image_to_world_transform"],
+            "photoreal_obstacle_alignment_world_to_image_transform": alignment["world_to_image_transform"],
+        }
+    )
+    write_json(root / "usd_obstacle_map_meta.json", meta)
+    bundle = load_obstacle_bundle(root)
+
+    record = inspect_pixel([50.0, 60.0], metadata, bundle)
+
+    assert record["grid_in_bounds"]
+    assert record["world_xy"][0] > 4.0
+    assert abs(record["world_xy"][1] - 3.0) < 0.2
 
 
 def test_nearest_object_prefers_containing_bbox() -> None:

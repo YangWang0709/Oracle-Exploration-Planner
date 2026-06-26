@@ -29,6 +29,43 @@ WORLD_IMAGE_CONVENTION = (
     "World coordinates use adjusted USD XY meters; +x maps right and +y maps up in the image."
 )
 INSPECTION_JUDGEMENTS = {"aligned", "misaligned", "uncertain", "inspect_only"}
+AXIS_MAPPING_PRESETS: dict[str, dict[str, Any]] = {
+    "metadata": {
+        "description": "Use the world/image transform already stored in the photoreal metadata.",
+        "u_axis_world": None,
+        "v_axis_world": None,
+    },
+    "x_right_y_up": {
+        "camera_axes_world": {"forward": [0.0, 0.0, -1.0], "right": [1.0, 0.0, 0.0], "up": [0.0, 1.0, 0.0]},
+        "description": "World +X maps to image +u; world +Y maps up in the image.",
+        "u_axis_world": [1.0, 0.0, 0.0],
+        "v_axis_world": [0.0, -1.0, 0.0],
+    },
+    "isaac_topdown_y_left_x_down": {
+        "camera_axes_world": {"forward": [0.0, 0.0, -1.0], "right": [0.0, -1.0, 0.0], "up": [-1.0, 0.0, 0.0]},
+        "description": "Observed Isaac topdown RGB orientation for seed 201: world -Y maps to image +u and world +X maps to image +v.",
+        "u_axis_world": [0.0, -1.0, 0.0],
+        "v_axis_world": [1.0, 0.0, 0.0],
+    },
+    "y_right_x_down": {
+        "camera_axes_world": {"forward": [0.0, 0.0, -1.0], "right": [0.0, 1.0, 0.0], "up": [-1.0, 0.0, 0.0]},
+        "description": "World +Y maps to image +u and world +X maps to image +v.",
+        "u_axis_world": [0.0, 1.0, 0.0],
+        "v_axis_world": [1.0, 0.0, 0.0],
+    },
+    "y_left_x_up": {
+        "camera_axes_world": {"forward": [0.0, 0.0, -1.0], "right": [0.0, -1.0, 0.0], "up": [1.0, 0.0, 0.0]},
+        "description": "World -Y maps to image +u and world -X maps to image +v.",
+        "u_axis_world": [0.0, -1.0, 0.0],
+        "v_axis_world": [-1.0, 0.0, 0.0],
+    },
+    "x_left_y_down": {
+        "camera_axes_world": {"forward": [0.0, 0.0, -1.0], "right": [-1.0, 0.0, 0.0], "up": [0.0, -1.0, 0.0]},
+        "description": "World -X maps to image +u and world +Y maps to image +v.",
+        "u_axis_world": [-1.0, 0.0, 0.0],
+        "v_axis_world": [0.0, 1.0, 0.0],
+    },
+}
 
 
 def utc_now_iso() -> str:
@@ -53,6 +90,182 @@ def apply_transform(matrix: Sequence[Sequence[float]], a: float, b: float) -> tu
         raise ValueError(f"Expected 3x3 transform matrix, got {mat.shape}")
     out = mat @ np.asarray([float(a), float(b), 1.0], dtype=np.float64)
     return float(out[0]), float(out[1])
+
+
+def _axis_xy(axis: Sequence[float]) -> np.ndarray:
+    arr = np.asarray(axis, dtype=np.float64)
+    if arr.shape[0] < 2:
+        raise ValueError(f"Axis must have at least x/y components, got {axis!r}")
+    xy = arr[:2]
+    norm = float(np.linalg.norm(xy))
+    if norm <= 1e-12:
+        raise ValueError(f"Axis has zero XY length: {axis!r}")
+    return xy / norm
+
+
+def _bounds_corners_xy(bounds_xy: dict[str, Any]) -> np.ndarray:
+    return np.asarray(
+        [
+            [float(bounds_xy["min_x"]), float(bounds_xy["min_y"])],
+            [float(bounds_xy["max_x"]), float(bounds_xy["min_y"])],
+            [float(bounds_xy["max_x"]), float(bounds_xy["max_y"])],
+            [float(bounds_xy["min_x"]), float(bounds_xy["max_y"])],
+        ],
+        dtype=np.float64,
+    )
+
+
+def image_world_transforms_from_axis_mapping(
+    bounds_xy: dict[str, Any],
+    width: int,
+    height: int,
+    *,
+    u_axis_world: Sequence[float],
+    v_axis_world: Sequence[float],
+) -> dict[str, Any]:
+    """Build image/world transforms for explicit image axes in USD world XY."""
+
+    width = int(width)
+    height = int(height)
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Image width/height must be positive, got {width}x{height}")
+    u_axis = _axis_xy(u_axis_world)
+    v_axis = _axis_xy(v_axis_world)
+    dot = float(np.dot(u_axis, v_axis))
+    if abs(dot) > 1e-6:
+        raise ValueError(f"Image u/v axes must be perpendicular, got dot={dot}")
+    corners = _bounds_corners_xy(bounds_xy)
+    proj_u = corners @ u_axis
+    proj_v = corners @ v_axis
+    min_u = float(proj_u.min())
+    max_u = float(proj_u.max())
+    min_v = float(proj_v.min())
+    max_v = float(proj_v.max())
+    meters_per_pixel_x = (max_u - min_u) / float(width)
+    meters_per_pixel_y = (max_v - min_v) / float(height)
+    world_to_image = [
+        [float(u_axis[0] / meters_per_pixel_x), float(u_axis[1] / meters_per_pixel_x), float(-min_u / meters_per_pixel_x)],
+        [float(v_axis[0] / meters_per_pixel_y), float(v_axis[1] / meters_per_pixel_y), float(-min_v / meters_per_pixel_y)],
+        [0.0, 0.0, 1.0],
+    ]
+    image_to_world = np.linalg.inv(np.asarray(world_to_image, dtype=np.float64)).tolist()
+    return {
+        "coordinate_convention": WORLD_IMAGE_CONVENTION,
+        "image_height": height,
+        "image_to_world": image_to_world,
+        "image_to_world_transform": image_to_world,
+        "image_width": width,
+        "image_axis_mapping": {
+            "camera_forward_world": None,
+            "u_axis_world": [float(u_axis[0]), float(u_axis[1]), 0.0],
+            "v_axis_world": [float(v_axis[0]), float(v_axis[1]), 0.0],
+        },
+        "meters_per_pixel_x": float(meters_per_pixel_x),
+        "meters_per_pixel_y": float(meters_per_pixel_y),
+        "world_bounds_xy": {
+            "max_x": float(bounds_xy["max_x"]),
+            "max_y": float(bounds_xy["max_y"]),
+            "min_x": float(bounds_xy["min_x"]),
+            "min_y": float(bounds_xy["min_y"]),
+        },
+        "world_to_image": world_to_image,
+        "world_to_image_transform": world_to_image,
+    }
+
+
+def axis_mapping_preset(name: str) -> dict[str, Any]:
+    if name not in AXIS_MAPPING_PRESETS:
+        choices = ", ".join(sorted(AXIS_MAPPING_PRESETS))
+        raise ValueError(f"Unknown axis mapping preset {name!r}; choices: {choices}")
+    return AXIS_MAPPING_PRESETS[name]
+
+
+def alignment_transform_for_metadata(photoreal_metadata: dict[str, Any], preset_name: str) -> dict[str, Any]:
+    preset = axis_mapping_preset(preset_name)
+    if preset_name == "metadata":
+        return {
+            "axis_mapping_preset": "metadata",
+            "camera_axes_world": photoreal_metadata.get("camera_axes_world"),
+            "image_axis_mapping": photoreal_metadata.get("image_axis_mapping"),
+            "image_to_world_transform": photoreal_metadata.get("image_to_world_transform")
+            or photoreal_metadata.get("image_to_world"),
+            "world_to_image_transform": photoreal_metadata.get("world_to_image_transform")
+            or photoreal_metadata.get("world_to_image"),
+        }
+    bounds = photoreal_world_bounds(photoreal_metadata)
+    height, width = photoreal_image_shape(photoreal_metadata)
+    transforms = image_world_transforms_from_axis_mapping(
+        bounds,
+        width,
+        height,
+        u_axis_world=preset["u_axis_world"],
+        v_axis_world=preset["v_axis_world"],
+    )
+    camera_axes = preset.get("camera_axes_world")
+    image_axis_mapping = {
+        **transforms["image_axis_mapping"],
+        "camera_forward_world": (camera_axes or {}).get("forward"),
+    }
+    return {
+        "axis_mapping_description": preset.get("description"),
+        "axis_mapping_preset": preset_name,
+        "camera_axes_world": camera_axes,
+        "image_axis_mapping": image_axis_mapping,
+        "image_to_world_transform": transforms["image_to_world_transform"],
+        "meters_per_pixel_x": transforms["meters_per_pixel_x"],
+        "meters_per_pixel_y": transforms["meters_per_pixel_y"],
+        "world_to_image_transform": transforms["world_to_image_transform"],
+    }
+
+
+def apply_alignment_transform_override(
+    photoreal_metadata: dict[str, Any],
+    alignment: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not alignment:
+        return dict(photoreal_metadata)
+    world_to_image = alignment.get("world_to_image_transform")
+    image_to_world = alignment.get("image_to_world_transform")
+    if not matrix_shape_ok(world_to_image) or not matrix_shape_ok(image_to_world):
+        return dict(photoreal_metadata)
+    metadata = dict(photoreal_metadata)
+    metadata["original_image_to_world_transform"] = photoreal_metadata.get("image_to_world_transform") or photoreal_metadata.get(
+        "image_to_world"
+    )
+    metadata["original_world_to_image_transform"] = photoreal_metadata.get("world_to_image_transform") or photoreal_metadata.get(
+        "world_to_image"
+    )
+    metadata["image_to_world"] = image_to_world
+    metadata["image_to_world_transform"] = image_to_world
+    metadata["world_to_image"] = world_to_image
+    metadata["world_to_image_transform"] = world_to_image
+    if alignment.get("camera_axes_world") is not None:
+        metadata["camera_axes_world"] = alignment["camera_axes_world"]
+    if alignment.get("image_axis_mapping") is not None:
+        metadata["image_axis_mapping"] = alignment["image_axis_mapping"]
+    if alignment.get("meters_per_pixel_x") is not None:
+        metadata["meters_per_pixel_x"] = alignment["meters_per_pixel_x"]
+    if alignment.get("meters_per_pixel_y") is not None:
+        metadata["meters_per_pixel_y"] = alignment["meters_per_pixel_y"]
+    metadata["obstacle_alignment_axis_mapping_preset"] = alignment.get("axis_mapping_preset")
+    metadata["obstacle_alignment_transform_override"] = True
+    return metadata
+
+
+def obstacle_alignment_metadata(photoreal_metadata: dict[str, Any], bundle_or_meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    meta = (bundle_or_meta or {}).get("meta", bundle_or_meta or {})
+    alignment = None
+    if isinstance(meta, dict) and matrix_shape_ok(meta.get("photoreal_obstacle_alignment_world_to_image_transform")):
+        alignment = {
+            "axis_mapping_preset": meta.get("photoreal_obstacle_alignment_axis_preset"),
+            "camera_axes_world": meta.get("camera_axes_world"),
+            "image_axis_mapping": meta.get("image_axis_mapping"),
+            "image_to_world_transform": meta.get("photoreal_obstacle_alignment_image_to_world_transform"),
+            "meters_per_pixel_x": meta.get("photoreal_obstacle_alignment_meters_per_pixel_x"),
+            "meters_per_pixel_y": meta.get("photoreal_obstacle_alignment_meters_per_pixel_y"),
+            "world_to_image_transform": meta.get("photoreal_obstacle_alignment_world_to_image_transform"),
+        }
+    return apply_alignment_transform_override(photoreal_metadata, alignment)
 
 
 def world_to_image_uv(photoreal_metadata: dict[str, Any], x: float, y: float) -> tuple[float, float]:
@@ -686,14 +899,15 @@ def render_overlay_set(
     base = Image.open(image_path).convert("RGB")
     image_shape = (base.size[1], base.size[0])
     bundle = load_obstacle_bundle(root)
+    metadata_for_alignment = obstacle_alignment_metadata(metadata, bundle)
     grid_meta = _grid_meta_from_bundle(bundle)
 
-    raw_img_mask = grid_mask_to_image_mask(bundle["obstacle_grid"], grid_meta, metadata, image_shape)
-    inflated_img_mask = grid_mask_to_image_mask(bundle["inflated_obstacle_grid"], grid_meta, metadata, image_shape)
+    raw_img_mask = grid_mask_to_image_mask(bundle["obstacle_grid"], grid_meta, metadata_for_alignment, image_shape)
+    inflated_img_mask = grid_mask_to_image_mask(bundle["inflated_obstacle_grid"], grid_meta, metadata_for_alignment, image_shape)
     clearance_img = grid_values_to_image(
         bundle["clearance_distance_m"].astype(np.float32),
         grid_meta,
-        metadata,
+        metadata_for_alignment,
         image_shape,
         default=np.float32(np.nan),
     )
@@ -713,16 +927,16 @@ def render_overlay_set(
     ).as_posix()
     paths["photoreal_object_bbox_overlay"] = _save_rgba(
         out / "photoreal_object_bbox_overlay.png",
-        draw_object_overlays(base, metadata, bundle.get("objects", []), max_objects=500, labels=True),
+        draw_object_overlays(base, metadata_for_alignment, bundle.get("objects", []), max_objects=500, labels=True),
     ).as_posix()
     paths["photoreal_alignment_grid_overlay"] = _save_rgba(
         out / "photoreal_alignment_grid_overlay.png",
-        draw_world_grid(base, metadata, photoreal_world_bounds(metadata), spacing_m=1.0, draw_axes=True),
+        draw_world_grid(base, metadata_for_alignment, photoreal_world_bounds(metadata), spacing_m=1.0, draw_axes=True),
     ).as_posix()
 
     manual_diag = None
     if include_manual_trajectory_diagnostic:
-        manual_diag = render_manual_trajectory_collision_diagnostic(root, base, metadata, grid_meta, bundle, out)
+        manual_diag = render_manual_trajectory_collision_diagnostic(root, base, metadata_for_alignment, grid_meta, bundle, out)
         if manual_diag.get("overlay_path"):
             paths["photoreal_manual_trajectory_vs_obstacle_overlay"] = str(manual_diag["overlay_path"])
 
@@ -735,8 +949,9 @@ def render_overlay_set(
         "outputs": paths,
         "photoreal_image": image_path.as_posix(),
         "photoreal_metadata": metadata_path.as_posix(),
+        "uses_obstacle_alignment_transform_override": bool(metadata_for_alignment.get("obstacle_alignment_transform_override")),
         "uses_photoreal_world_to_image_transform": True,
-        "world_to_image_transform": metadata.get("world_to_image_transform") or metadata.get("world_to_image"),
+        "world_to_image_transform": metadata_for_alignment.get("world_to_image_transform") or metadata_for_alignment.get("world_to_image"),
     }
     write_json(out / "photoreal_obstacle_overlay_qa.json", summary)
     return summary
@@ -905,6 +1120,7 @@ def inspect_pixel(
 ) -> dict[str, Any]:
     u = float(pixel_uv[0])
     v = float(pixel_uv[1])
+    photoreal_metadata = obstacle_alignment_metadata(photoreal_metadata, bundle)
     grid_meta = _grid_meta_from_bundle(bundle)
     x, y = image_to_world_xy(photoreal_metadata, u, v)
     row, col = world_to_grid_rc(x, y, grid_meta)
@@ -1139,6 +1355,7 @@ def compose_alignment_overlay(
     alpha: float = 0.35,
 ) -> Image.Image:
     image_shape = (base.size[1], base.size[0])
+    photoreal_metadata = obstacle_alignment_metadata(photoreal_metadata, bundle)
     grid_meta = _grid_meta_from_bundle(bundle)
     out: Image.Image = base.convert("RGBA")
     if clearance:
@@ -1172,6 +1389,7 @@ def render_alignment_static_images(
     out = ensure_dir(out_dir)
     bundle = load_obstacle_bundle(obstacle_map_dir)
     metadata = read_json(photoreal_metadata)
+    metadata_for_alignment = obstacle_alignment_metadata(metadata, bundle)
     base = Image.open(photoreal_image).convert("RGB")
     paths = {
         "alignment_static_raw_obstacles": _save_rgba(
@@ -1192,7 +1410,14 @@ def render_alignment_static_images(
         ).as_posix(),
         "alignment_static_checkerboard": _save_rgba(
             out / "alignment_static_checkerboard.png",
-            draw_world_grid(base, metadata, photoreal_world_bounds(metadata), spacing_m=1.0, draw_axes=True, checkerboard=True),
+            draw_world_grid(
+                base,
+                metadata_for_alignment,
+                photoreal_world_bounds(metadata),
+                spacing_m=1.0,
+                draw_axes=True,
+                checkerboard=True,
+            ),
         ).as_posix(),
     }
     return paths
