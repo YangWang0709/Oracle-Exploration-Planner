@@ -80,6 +80,30 @@ Photoreal overlays are written under `usd_obstacle_map_v1/overlays/`:
 - `photoreal_alignment_grid_overlay.png`
 - `photoreal_manual_trajectory_vs_obstacle_overlay.png`, if `manual_trajectory/manual_dense_trajectory.jsonl` exists
 
+For manual route annotation, also render the dedicated photoreal annotation base:
+
+```bash
+python scripts/render_manual_annotation_obstacle_base.py \
+  --photoreal-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --photoreal-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4" \
+  --planning-alpha 0.30 \
+  --show-raw-outline
+```
+
+This writes `photoreal_topdown_annotatable_obstacles.png`, a debug variant, and provenance metadata. It does not change the image/world transform; annotation still uses `photoreal_topdown_metadata_aligned.json`. Red pixels are `planning_obstacle_grid.npy` and should not be clicked. `debug_inflated_obstacle_grid.npy` is diagnostic only and is not shown on the default annotation image.
+
+QA the annotation base:
+
+```bash
+python scripts/qa_annotation_obstacle_base.py \
+  --annotatable-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png" \
+  --clean-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1"
+```
+
 To regenerate overlays without rebuilding USD geometry:
 
 ```bash
@@ -206,6 +230,8 @@ After the user confirms the USD obstacle overlay is aligned, build manual trajec
 `outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1/planning_obstacle_grid.npy`
 
 as the default snap, local corridor A*, and collision blocker:
+
+The route annotation step should use `photoreal_topdown_annotatable_obstacles.png` plus `--obstacle-map-dir .../usd_obstacle_map_v1 --warn-if-click-planning-obstacle` so clicks inside planning obstacles are rejected before build time.
 
 ```bash
 python scripts/build_manual_trajectory.py \

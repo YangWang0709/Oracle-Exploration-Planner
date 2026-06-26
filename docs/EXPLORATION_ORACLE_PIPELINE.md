@@ -27,9 +27,9 @@ Manual-route multisensor replay is implemented in `scripts/replay_manual_route_c
 
 Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 
-Manual route annotation is implemented with `scripts/render_manual_annotation_semantic_floorplan.py`, `scripts/render_manual_annotation_photoreal_topdown_isaac.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. Manual routes are pose routes: every waypoint records adjusted USD world `x`, `y`, and user-annotated `yaw`. Semantic floorplans are best for furniture/category readability, photoreal topdown maps are best for realistic scene appearance review, and geometry footprints are debug-only. The previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
+Manual route annotation is implemented with `scripts/render_manual_annotation_semantic_floorplan.py`, `scripts/render_manual_annotation_photoreal_topdown_isaac.py`, `scripts/render_manual_annotation_obstacle_base.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. Manual routes are pose routes: every waypoint records adjusted USD world `x`, `y`, and user-annotated `yaw`. Semantic floorplans are best for furniture/category readability; the current recommended photoreal base is `photoreal_topdown_annotatable_obstacles.png`, which overlays planning obstacles on the real topdown render without changing the clean image transform. Geometry footprints are debug-only. The previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
 
-USD obstacle alignment diagnostics are implemented with `scripts/build_usd_obstacle_map.py`, `scripts/render_usd_obstacle_overlay.py`, `scripts/inspect_usd_obstacle_alignment.py`, and `scripts/qa_usd_obstacle_map_alignment.py`. Use `docs/USD_OBSTACLE_MAP_ALIGNMENT.md` to validate adjusted-USD obstacle, inflated obstacle, clearance, bbox, and interactive click overlays against `photoreal_topdown_clean.png` before changing manual trajectory collision logic.
+USD obstacle alignment diagnostics are implemented with `scripts/build_usd_obstacle_map.py`, `scripts/render_usd_obstacle_overlay.py`, `scripts/inspect_usd_obstacle_alignment.py`, `scripts/qa_usd_obstacle_map_alignment.py`, and `scripts/qa_annotation_obstacle_base.py`. Use `docs/USD_OBSTACLE_MAP_ALIGNMENT.md` to validate adjusted-USD obstacle, inflated obstacle, clearance, bbox, and interactive click overlays against `photoreal_topdown_clean.png` before changing manual trajectory collision logic.
 
 Automatic route generation/review tooling has been removed. The current route-audit workflow is manual route annotation, followed by manual trajectory building, manual replay, and manual replay QA.
 
@@ -103,7 +103,8 @@ Current validated seed 201 historical result:
 - No-fill RGB-D smoke test: passed with RGB black-frame ratio `0.0`
 - Automatic path overlay review: deprecated; no longer recommended for route audit
 - Manual route annotation: recommended user route-audit workflow, using semantic floorplan or photoreal orthographic topdown base maps; manual waypoints are `x, y, yaw` poses
-- USD obstacle overlay alignment: required before using `usd_obstacle_map_v1/inflated_obstacle_grid.npy` to rebuild manual trajectories
+- USD obstacle overlay alignment: required before using `usd_obstacle_map_v1/planning_obstacle_grid.npy` to rebuild manual trajectories
+- Manual photoreal route annotation: use `manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png` with `photoreal_topdown_metadata_aligned.json`
 - 100-frame no-fill RGB-D pilot: passed QA with RGB/depth/`distance_to_camera` counts `100 / 100 / 100`
 - `photometric_valid_for_training`: `true`
 - `robot_specific_valid_for_training`: `false` until a real robot USD is available
@@ -178,6 +179,10 @@ Manual annotation artifacts:
 - `manual_annotation_floorplan_v3/floorplan.svg`
 - `manual_annotation_floorplan_v3/semantic_floorplan_qa.json`
 - `manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png`
+- `manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png`
+- `manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles_with_debug.png`
+- `manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles_metadata.json`
+- `manual_annotation_photoreal_topdown_v4/annotation_obstacle_base_qa.json`
 - `manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_start.png`
 - `manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_bounds.png`
 - `manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json`
@@ -205,7 +210,7 @@ Manual trajectory records must include `pose_annotation_mode=position_plus_yaw`,
 
 `manual_route/manual_route_preview.png` is the raw user-clicked waypoint pose preview. `manual_trajectory/manual_trajectory_preview_photoreal.png` is the final manual-polyline-first dense trajectory preview over the photoreal topdown annotation image. After USD obstacle alignment is confirmed, `manual_trajectory/manual_trajectory_preview_photoreal_with_obstacles.png` is the primary collision review artifact because it includes the route, waypoints, headings, and `planning_obstacle_grid.npy`. `manual_trajectory/manual_trajectory_deviation_audit.png` shows whether the dense path stayed close to the manual polyline. `manual_trajectory/manual_trajectory_preview_obstacle_qa.png` additionally shows raw/planning/debug obstacle masks for QA. `manual_trajectory/manual_trajectory_preview_map.png` is debug-only.
 
-The manual trajectory builder should use `--manual-follow-mode polyline_first --usd-obstacle-map-dir .../usd_obstacle_map_v1 --prefer-usd-obstacle-map --collision-check-mode planning_obstacle` once the overlay is aligned. Manual waypoints are hard constraints: collision-free segments follow the user polyline directly, and A* is allowed only inside a local corridor when a segment crosses a planning obstacle. If corridor A* would deviate too far, build fails and the user should add intermediate waypoints. The default blocker is `planning_obstacle_grid.npy`; `debug_inflated_obstacle_grid.npy` is only a conservative safety reference and should not block normal manual route planning.
+The manual annotator should use `photoreal_topdown_annotatable_obstacles.png` and `--obstacle-map-dir .../usd_obstacle_map_v1 --warn-if-click-planning-obstacle`; waypoint position clicks inside red planning-obstacle pixels are rejected before build time, while debug-inflated-only clicks are warnings. The manual trajectory builder should use `--manual-follow-mode polyline_first --usd-obstacle-map-dir .../usd_obstacle_map_v1 --prefer-usd-obstacle-map --collision-check-mode planning_obstacle` once the overlay is aligned. Manual waypoints are hard constraints: collision-free segments follow the user polyline directly, and A* is allowed only inside a local corridor when a segment crosses a planning obstacle. If corridor A* would deviate too far, build fails and the user should add intermediate waypoints. The default blocker is `planning_obstacle_grid.npy`; `debug_inflated_obstacle_grid.npy` is only a conservative safety reference and should not block normal manual route planning.
 
 Generated map, path, image, video, USD, blend, RGB-D, `.npy`, and dataset artifacts remain under `outputs/` or the external Infinigen tree and are not committed. Durable result summaries should be written into docs.
 

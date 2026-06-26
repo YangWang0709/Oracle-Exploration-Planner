@@ -22,20 +22,21 @@ Before changing the manual trajectory to avoid new obstacles, first validate the
 There are now three manual annotation base-map choices:
 
 - Semantic floorplan: recommended for seeing furniture categories and planning routes.
-- Photoreal topdown: recommended for auditing real scene appearance and marking routes on a true USD/Isaac render.
+- Photoreal topdown with planning obstacles: recommended for auditing real scene appearance and marking routes on a true USD/Isaac render while seeing non-clickable planning obstacles.
 - Geometry footprint: debug only.
 
-The semantic floorplan is generated directly from imported adjusted USD mesh geometry and does not depend on an Isaac camera. The photoreal topdown map uses a high orthographic Isaac/Replicator camera and writes affine image/world transforms for the manual annotator.
+The semantic floorplan is generated directly from imported adjusted USD mesh geometry and does not depend on an Isaac camera. The photoreal topdown map uses a high orthographic Isaac/Replicator camera and writes affine image/world transforms for the manual annotator. The current recommended photoreal annotation image is not the plain clean render; it is `photoreal_topdown_annotatable_obstacles.png`, which keeps the same pixel/world transform as `photoreal_topdown_clean.png` and overlays `planning_obstacle_grid.npy`.
 
 ## Workflow
 
 1. Render a clean semantic floorplan or photoreal orthographic topdown map from the adjusted USD.
-2. Randomly initialize a legal robot start pose from the reachable/traversable map.
-3. User manually clicks route waypoint poses on the base image.
-4. Convert clicked image coordinates and heading clicks to adjusted USD world `x, y, yaw`.
-5. Use A* only to connect adjacent user waypoints through traversable space.
-6. Generate `manual_dense_trajectory.jsonl` using annotated yaw by default.
-7. Replay RGB-D using the manual trajectory poses only.
+2. For photoreal annotation, render `photoreal_topdown_annotatable_obstacles.png` from the clean image plus `usd_obstacle_map_v1/planning_obstacle_grid.npy`.
+3. Randomly initialize a legal robot start pose from the reachable/traversable map.
+4. User manually clicks route waypoint poses on the base image.
+5. Convert clicked image coordinates and heading clicks to adjusted USD world `x, y, yaw`.
+6. Use A* only to connect adjacent user waypoints through traversable space.
+7. Generate `manual_dense_trajectory.jsonl` using annotated yaw by default.
+8. Replay RGB-D using the manual trajectory poses only.
 
 The default start pose is random but reproducible with `--random-seed`. It is sampled from cells that are in bounds, reachable, traversable, outside occupied/inflated obstacles, and satisfy the requested clearance.
 
@@ -151,10 +152,40 @@ Photoreal outputs:
 - `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_camera_debug.json`
 - `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_render_report.json`
 
-Open the photoreal clean PNG for realistic route annotation:
+Generate the obstacle-aware photoreal annotation image:
 
 ```bash
-xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png"
+python scripts/render_manual_annotation_obstacle_base.py \
+  --photoreal-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --photoreal-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4" \
+  --planning-alpha 0.30 \
+  --show-raw-outline
+```
+
+Obstacle-aware annotation outputs:
+
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles_with_debug.png`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles_metadata.json`
+
+`photoreal_topdown_annotatable_obstacles.png` is the current recommended photoreal route annotation entry point. It has exactly the same size and pixel/world transform as `photoreal_topdown_clean.png`; continue to pass `photoreal_topdown_metadata_aligned.json` to the annotator. The red overlay is `planning_obstacle_grid.npy`; do not click waypoints inside red regions. The debug-inflated obstacle layer is not shown in the primary annotation image because it is conservative and can visually close doors.
+
+QA the obstacle-aware annotation image:
+
+```bash
+python scripts/qa_annotation_obstacle_base.py \
+  --annotatable-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png" \
+  --clean-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1"
+```
+
+Open the obstacle-aware photoreal PNG for realistic route annotation:
+
+```bash
+xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png"
 ```
 
 Photoreal base map QA:
@@ -178,23 +209,30 @@ Or run the same annotator on the photoreal topdown map:
 
 ```bash
 python scripts/manual_route_annotator.py \
-  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png" \
   --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
-  --require-aligned-metadata
+  --require-aligned-metadata \
+  --fresh \
+  --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
+  --warn-if-click-planning-obstacle
 ```
+
+With `--obstacle-map-dir`, the annotator checks each waypoint position click against `planning_obstacle_grid.npy`. A click inside the red planning obstacle overlay is rejected with `Clicked point is inside planning obstacle. Choose a nearby free point.` Heading clicks are not obstacle-checked. A click inside `debug_inflated_obstacle_grid.npy` but outside planning obstacles produces a warning and is allowed.
 
 Optional heading transform debug:
 
 ```bash
 python scripts/manual_route_annotator.py \
-  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png" \
   --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
   --require-aligned-metadata \
-  --debug-heading
+  --debug-heading \
+  --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
+  --warn-if-click-planning-obstacle
 ```
 
 `--debug-heading` is optional. It shows heading conversion details in the annotator status bar, prints the waypoint pixel, heading pixel, waypoint world, heading world, yaw, and axis preset after each heading click, and records `heading_debug_enabled=true` in `manual_route_metadata.json`. It does not change saved waypoint coordinates, yaw calculation, autosave behavior, or trajectory building.
@@ -203,12 +241,14 @@ By default the annotator reloads an existing final route or autosave in `--out` 
 
 ```bash
 python scripts/manual_route_annotator.py \
-  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png" \
   --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
   --require-aligned-metadata \
-  --fresh
+  --fresh \
+  --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
+  --warn-if-click-planning-obstacle
 ```
 
 Annotator controls:

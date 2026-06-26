@@ -4,7 +4,7 @@
 
 The semantic floorplan is readable and remains useful for furniture/category inspection, but it is intentionally schematic. The photoreal topdown renderer adds a second manual-annotation base map: a real Isaac/Replicator render from a high orthographic camera above the adjusted USD scene.
 
-Use this image when you want to audit the real scene appearance while still clicking waypoints in a map whose pixels map accurately back to adjusted USD world XY coordinates.
+Use this render when you want to audit the real scene appearance while still clicking waypoints in a map whose pixels map accurately back to adjusted USD world XY coordinates. For actual route annotation, use the obstacle-aware derivative `photoreal_topdown_annotatable_obstacles.png`, not the plain clean render.
 
 ## Why Orthographic
 
@@ -32,7 +32,10 @@ The renderer computes full visible-geometry bounds from the adjusted USD stage w
 
 ## Outputs
 
-- `photoreal_topdown_clean.png`: primary photoreal annotation image. It contains no route, no heading arrows, no waypoint overlay, and no start marker.
+- `photoreal_topdown_clean.png`: clean photoreal source image. It contains no route, no heading arrows, no waypoint overlay, and no start marker.
+- `photoreal_topdown_annotatable_obstacles.png`: current recommended photoreal annotation image. It overlays `planning_obstacle_grid.npy` in transparent red and keeps the same pixel/world transform as the clean image.
+- `photoreal_topdown_annotatable_obstacles_with_debug.png`: diagnostic image that also shows raw/debug obstacle context.
+- `photoreal_topdown_annotatable_obstacles_metadata.json`: provenance for the obstacle-aware annotation image.
 - `photoreal_topdown_with_start.png`: same render with only the random start marker.
 - `photoreal_topdown_with_bounds.png`: final bounds, raw USD visible bounds, oracle map bounds, and corner world coordinates.
 - `photoreal_topdown_metadata.json`: original render metadata and camera provenance.
@@ -40,10 +43,32 @@ The renderer computes full visible-geometry bounds from the adjusted USD stage w
 - `photoreal_topdown_camera_debug.json`: USD bounds and camera parameter debug report.
 - `photoreal_topdown_render_report.json`: render summary and RGB brightness statistics.
 
-Open the clean image for annotation:
+Render the obstacle-aware annotation image:
 
 ```bash
-xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png"
+python scripts/render_manual_annotation_obstacle_base.py \
+  --photoreal-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --photoreal-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4" \
+  --planning-alpha 0.30 \
+  --show-raw-outline
+```
+
+QA it:
+
+```bash
+python scripts/qa_annotation_obstacle_base.py \
+  --annotatable-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png" \
+  --clean-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1"
+```
+
+Open the obstacle-aware image for annotation:
+
+```bash
+xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png"
 ```
 
 Open the start overlay only for reference:
@@ -67,14 +92,19 @@ Each manual waypoint is a pose. Click once for the waypoint position, then click
 
 ```bash
 python scripts/manual_route_annotator.py \
-  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png" \
   --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
-  --require-aligned-metadata
+  --require-aligned-metadata \
+  --fresh \
+  --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
+  --warn-if-click-planning-obstacle
 ```
 
 For seed 201 photoreal topdown annotation, use `photoreal_topdown_metadata_aligned.json`. Do not use the original `photoreal_topdown_metadata.json` for manual route annotation.
+
+The obstacle-aware PNG uses the same `photoreal_topdown_metadata_aligned.json` transform as `photoreal_topdown_clean.png`; no crop, rotation, scale, or alternate metadata is introduced. Red pixels mark planning obstacles and should not be clicked. Debug-inflated obstacles are intentionally not shown on the primary annotation image; they remain warning-only and are visible in the debug image.
 
 To inspect heading alignment while annotating, add the optional `--debug-heading` flag to the same command. It shows the live heading transform in the status bar, prints pixel/world/yaw details after each heading click, and records `heading_debug_enabled=true` in `manual_route_metadata.json`. It is debug-only and does not affect route saving or trajectory building.
 

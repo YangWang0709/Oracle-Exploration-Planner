@@ -869,6 +869,8 @@ def _manual_route_documents(
     force_quit: bool = False,
     final_save_completed: bool = True,
     heading_debug_enabled: bool = False,
+    obstacle_click_check_enabled: bool = False,
+    obstacle_map_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     metadata = read_json(metadata_path)
     metadata_sha = file_sha256(metadata_path)
@@ -952,6 +954,8 @@ def _manual_route_documents(
         "metadata_axis_preset": metadata_alignment.get("axis_preset"),
         "metadata_path_used": Path(metadata_path).as_posix(),
         "metadata_sha256": metadata_sha,
+        "obstacle_click_check_enabled": bool(obstacle_click_check_enabled),
+        "obstacle_map_dir": Path(obstacle_map_dir).as_posix() if obstacle_map_dir else None,
         "pending_missing_heading": pending_missing_heading,
         "pending_waypoint_image": pending_image,
         "pending_waypoint_world": pending_world,
@@ -977,6 +981,8 @@ def _manual_route_documents(
         "metadata_axis_preset": metadata_alignment.get("axis_preset"),
         "metadata_path_used": Path(metadata_path).as_posix(),
         "metadata_sha256": metadata_sha,
+        "obstacle_click_check_enabled": bool(obstacle_click_check_enabled),
+        "obstacle_map_dir": Path(obstacle_map_dir).as_posix() if obstacle_map_dir else None,
         "pending_missing_heading": pending_missing_heading,
         "pending_waypoint_image": pending_image,
         "pending_waypoint_world": pending_world,
@@ -1008,6 +1014,8 @@ def _manual_route_documents(
             "Manual route starts from the recorded start pose; each user waypoint records both position and yaw.",
             "No automatic route overlay, direction indicators, or coverage planner route was used for annotation.",
         ],
+        "obstacle_click_check_enabled": bool(obstacle_click_check_enabled),
+        "obstacle_map_dir": Path(obstacle_map_dir).as_posix() if obstacle_map_dir else None,
         "all_user_waypoints_have_yaw": all_have_yaw,
         "autosave_enabled": True,
         "final_save_completed": bool(final_save_completed),
@@ -1134,6 +1142,8 @@ def save_manual_route_annotation(
     start_pose_source: str | None = None,
     random_seed: int | None = None,
     heading_debug_enabled: bool = False,
+    obstacle_click_check_enabled: bool = False,
+    obstacle_map_dir: str | Path | None = None,
 ) -> dict[str, Path]:
     docs = _manual_route_documents(
         base_image=base_image,
@@ -1144,6 +1154,8 @@ def save_manual_route_annotation(
         start_pose_source=start_pose_source,
         random_seed=random_seed,
         heading_debug_enabled=heading_debug_enabled,
+        obstacle_click_check_enabled=obstacle_click_check_enabled,
+        obstacle_map_dir=obstacle_map_dir,
     )
     out = ensure_dir(out_dir)
     paths = {
@@ -1192,6 +1204,8 @@ def save_manual_route_autosave(
     force_quit: bool = False,
     final_save_completed: bool = False,
     heading_debug_enabled: bool = False,
+    obstacle_click_check_enabled: bool = False,
+    obstacle_map_dir: str | Path | None = None,
 ) -> dict[str, Path]:
     docs = _manual_route_documents(
         base_image=base_image,
@@ -1205,6 +1219,8 @@ def save_manual_route_autosave(
         force_quit=force_quit,
         final_save_completed=final_save_completed,
         heading_debug_enabled=heading_debug_enabled,
+        obstacle_click_check_enabled=obstacle_click_check_enabled,
+        obstacle_map_dir=obstacle_map_dir,
     )
     out = ensure_dir(Path(out_dir) / "autosave")
     paths = {

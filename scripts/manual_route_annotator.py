@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from oracle_explorer.annotation_obstacles import inspect_annotation_click
 from oracle_explorer.io_utils import read_json
 from oracle_explorer.manual_route import (
     compute_yaw_from_image_heading,
@@ -34,6 +35,7 @@ from oracle_explorer.manual_route import (
     yaw_to_deg,
 )
 from oracle_explorer.usd_obstacle_alignment import is_aligned_photoreal_metadata
+from oracle_explorer.usd_obstacle_alignment import load_obstacle_bundle
 from oracle_explorer.start_sampling import sample_random_start_pose
 
 
@@ -56,6 +58,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--require-aligned-metadata", action="store_true")
     parser.add_argument("--fresh", action="store_true", help="Start a new empty route and back up any existing --out directory first.")
     parser.add_argument("--debug-heading", action="store_true", help="Print and display image/world heading conversion details while annotating.")
+    parser.add_argument("--obstacle-map-dir", default=None, help="USD obstacle map directory used to reject waypoint clicks inside planning obstacles.")
+    parser.add_argument("--warn-if-click-planning-obstacle", action="store_true", help="Warn/reject waypoint position clicks that land inside planning obstacles.")
     return parser.parse_args(argv)
 
 
@@ -174,6 +178,8 @@ def main() -> None:
     metadata = read_json(metadata_path)
     map_bundle = load_map_bundle(args.map_dir)
     image = Image.open(base_image).convert("RGB")
+    obstacle_bundle = load_obstacle_bundle(args.obstacle_map_dir) if args.obstacle_map_dir else None
+    obstacle_click_check_enabled = obstacle_bundle is not None
     needs_aligned = requires_aligned_photoreal_metadata(base_image, metadata)
     aligned = is_aligned_photoreal_metadata(metadata)
     if needs_aligned and not aligned:
@@ -317,6 +323,8 @@ def main() -> None:
                 force_quit=force_quit,
                 final_save_completed=final_save_completed,
                 heading_debug_enabled=bool(args.debug_heading),
+                obstacle_click_check_enabled=obstacle_click_check_enabled,
+                obstacle_map_dir=args.obstacle_map_dir,
             )
             print(f"AUTOSAVED draft route: {paths['manual_waypoints_world_autosave'].resolve()}")
             return True
@@ -350,6 +358,8 @@ def main() -> None:
                 start_pose_source=state["start_pose_source"],
                 random_seed=state["random_seed"],
                 heading_debug_enabled=bool(args.debug_heading),
+                obstacle_click_check_enabled=obstacle_click_check_enabled,
+                obstacle_map_dir=args.obstacle_map_dir,
             )
         except Exception as exc:
             message = f"SAVE FAILED: {type(exc).__name__}: {exc}"
@@ -485,9 +495,28 @@ def main() -> None:
         if event.button == 1:
             pending = state.get("pending_waypoint")
             if pending is None:
+                debug_inflated_warning = False
+                if obstacle_bundle is not None:
+                    click_check = inspect_annotation_click(
+                        pixel_uv=[float(event.xdata), float(event.ydata)],
+                        photoreal_metadata=metadata,
+                        obstacle_bundle=obstacle_bundle,
+                    )
+                    if not click_check["allowed"]:
+                        message = str(click_check["message"])
+                        print(message)
+                        set_status(message, unsaved=bool(state.get("unsaved_changes")))
+                        draw()
+                        return
+                    debug_inflated_warning = click_check["status"] == "warn_debug_inflated"
+                    if debug_inflated_warning:
+                        print(click_check["message"])
                 idx = len(state["user_waypoints"]) + 1
                 state["pending_waypoint"] = {"idx": idx, "kind": "manual", "u": float(event.xdata), "v": float(event.ydata)}
-                set_status(f"Click heading direction for waypoint {idx}", unsaved=True)
+                if debug_inflated_warning:
+                    set_status(f"Warning: debug inflated only. Click heading direction for waypoint {idx}", unsaved=True)
+                else:
+                    set_status(f"Click heading direction for waypoint {idx}", unsaved=True)
                 autosave(final_save_completed=False)
             else:
                 try:
