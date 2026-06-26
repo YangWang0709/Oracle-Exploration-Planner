@@ -100,6 +100,23 @@ python scripts/recover_manual_route_autosave.py \
 
 After annotation, build `manual_trajectory/manual_dense_trajectory.jsonl` with `--yaw-mode annotated --yaw-interpolation shortest` and replay RGB-D from that manual trajectory only. Pass `--preview-base-image manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png`, `--preview-metadata manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json`, `--preview-mode photoreal`, and `--require-route-metadata-aligned` when building the trajectory. `manual_route_preview.png` shows the raw clicked waypoint poses; `manual_trajectory_preview_photoreal.png` shows the final A*/snap/dense trajectory over the same photoreal topdown image. Open `manual_trajectory/manual_trajectory_preview_photoreal.png` for route review. The automatic coverage trajectory is reference-only and must not be used as the data source after a user route has been annotated.
 
+If the final preview still looks wrong, run the projection audit:
+
+```bash
+python scripts/audit_manual_route_projection.py \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --manual-route-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
+  --manual-trajectory-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory" \
+  --usd-obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route_projection_audit"
+
+python scripts/qa_manual_route_projection.py \
+  --audit-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route_projection_audit"
+```
+
+Review `clicked_vs_reprojected_diff_overlay.png` and `dense_trajectory_with_obstacles_audit.png`. Clicked/reprojected mismatch means stale or wrong annotation metadata; clicked/reprojected agreement with a displaced dense line means A*/snap changed the route; dense points inside planning obstacles mean the waypoint or obstacle map needs correction.
+
 ## Replay Rule
 
 After annotation, RGB-D replay must use `manual_trajectory/manual_dense_trajectory.jsonl` and metadata must record `route_source=manual`, `route_is_user_annotated=true`, `pose_annotation_mode=position_plus_yaw`, and `uses_manual_yaw=true`.

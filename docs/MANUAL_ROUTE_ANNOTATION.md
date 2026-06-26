@@ -320,6 +320,23 @@ python scripts/build_manual_trajectory.py \
 
 After the USD obstacle overlay has been visually confirmed against the photoreal topdown image, manual trajectory building should use `usd_obstacle_map_v1/planning_obstacle_grid.npy` for snap, A*, and collision checks. `debug_inflated_obstacle_grid.npy` is a conservative safety reference and is not the default route blocker.
 
+If the final photoreal preview still looks misaligned, run the projection audit before changing transforms or re-annotating:
+
+```bash
+python scripts/audit_manual_route_projection.py \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --manual-route-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
+  --manual-trajectory-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory" \
+  --usd-obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route_projection_audit"
+
+python scripts/qa_manual_route_projection.py \
+  --audit-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route_projection_audit"
+```
+
+Open `clicked_vs_reprojected_diff_overlay.png` first. If clicked points and world-reprojected points do not overlap, the route was saved with the wrong or stale metadata and should be re-annotated with `photoreal_topdown_metadata_aligned.json`. Then open `dense_trajectory_with_obstacles_audit.png`: if clicked/reprojected points overlap but the dense route is displaced, A*/snap changed the route too much; if dense points enter the planning obstacle overlay, fix the obstacle map or waypoint placement.
+
 Manual trajectory outputs:
 
 - `manual_dense_trajectory.jsonl`

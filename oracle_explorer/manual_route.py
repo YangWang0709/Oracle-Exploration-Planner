@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import shutil
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -57,6 +58,7 @@ STALE_TRANSFORM_WARNING_TEXT = (
     "This manual route was created with a stale photoreal metadata transform.\n"
     "Re-run manual_route_annotator.py with photoreal_topdown_metadata_aligned.json.\n"
 )
+ALIGNED_PHOTOREAL_METADATA_NAME = "photoreal_topdown_metadata_aligned.json"
 
 
 def load_map_bundle(map_dir: str | Path) -> dict[str, Any]:
@@ -265,10 +267,19 @@ def requires_aligned_photoreal_metadata(base_image: str | Path, metadata: dict[s
     return False
 
 
+def file_sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def manual_route_alignment_info(route_dir_or_waypoints: str | Path) -> dict[str, Any]:
     path = Path(route_dir_or_waypoints)
     route_dir = path.parent if path.name == "manual_waypoints_world.json" else path
     metadata_path = route_dir / "manual_route_metadata.json"
+    stale_marker = route_dir / "STALE_TRANSFORM_WARNING.txt"
     if not metadata_path.exists():
         return {
             "aligned": False,
@@ -277,20 +288,23 @@ def manual_route_alignment_info(route_dir_or_waypoints: str | Path) -> dict[str,
             "metadata_alignment_warning": STALE_PHOTOREAL_METADATA_WARNING,
             "metadata_path": metadata_path.as_posix(),
             "route_metadata_exists": False,
+            "stale_marker_exists": stale_marker.exists(),
         }
     metadata = read_json(metadata_path)
     aligned = (
-        metadata.get("metadata_alignment_transform_source") == "axis_preset"
-        and metadata.get("metadata_axis_preset") == DEFAULT_ALIGNED_PHOTOREAL_AXIS_PRESET
+        (metadata.get("metadata_alignment_transform_source") or metadata.get("alignment_transform_source")) == "axis_preset"
+        and (metadata.get("metadata_axis_preset") or metadata.get("axis_preset")) == DEFAULT_ALIGNED_PHOTOREAL_AXIS_PRESET
     )
     return {
         "aligned": bool(aligned),
-        "alignment_transform_source": metadata.get("metadata_alignment_transform_source"),
-        "axis_preset": metadata.get("metadata_axis_preset"),
+        "alignment_transform_source": metadata.get("metadata_alignment_transform_source") or metadata.get("alignment_transform_source"),
+        "axis_preset": metadata.get("metadata_axis_preset") or metadata.get("axis_preset"),
         "metadata_alignment_warning": metadata.get("metadata_alignment_warning") or (None if aligned else STALE_PHOTOREAL_METADATA_WARNING),
         "metadata_path": metadata_path.as_posix(),
         "metadata_path_used": metadata.get("metadata_path_used"),
+        "metadata_sha256": metadata.get("metadata_sha256"),
         "route_metadata_exists": True,
+        "stale_marker_exists": stale_marker.exists(),
     }
 
 
@@ -333,6 +347,94 @@ def image_waypoints_to_world(
             row["heading_world"] = [hx, hy]
         world.append(row)
     return world
+
+
+def manual_route_projection_roundtrip(
+    *,
+    manual_route_dir: str | Path,
+    metadata: dict[str, Any],
+    threshold_px: float = 5.0,
+) -> dict[str, Any]:
+    """Compare saved image clicks with saved world waypoints reprojected through metadata."""
+
+    route_dir = Path(manual_route_dir)
+    image_path = route_dir / "manual_waypoints_image.json"
+    world_path = route_dir / "manual_waypoints_world.json"
+    if not image_path.exists() or not world_path.exists():
+        return {
+            "checked": False,
+            "failures": [
+                f"missing manual route image/world files: image={image_path.exists()}, world={world_path.exists()}"
+            ],
+            "max_error_px": None,
+            "mean_error_px": None,
+            "ok": False,
+            "threshold_px": float(threshold_px),
+            "waypoints": [],
+            "waypoints_over_threshold": [],
+        }
+    image_doc = read_json(image_path)
+    world_doc = read_json(world_path)
+    image_rows = image_doc.get("full_waypoints") or image_doc.get("user_waypoints") or []
+    world_rows = world_doc.get("full_waypoints") or world_doc.get("user_waypoints") or []
+    world_by_idx = {int(row.get("idx", idx)): row for idx, row in enumerate(world_rows) if isinstance(row, dict)}
+    rows: list[dict[str, Any]] = []
+    failures: list[str] = []
+    for fallback_idx, image_row in enumerate(image_rows):
+        if not isinstance(image_row, dict) or "u" not in image_row or "v" not in image_row:
+            continue
+        waypoint_idx = int(image_row.get("idx", fallback_idx))
+        world_row = world_by_idx.get(waypoint_idx)
+        if world_row is None or "x" not in world_row or "y" not in world_row:
+            failures.append(f"missing world waypoint for image waypoint idx={waypoint_idx}")
+            continue
+        clicked_u, clicked_v = float(image_row["u"]), float(image_row["v"])
+        world_x, world_y = float(world_row["x"]), float(world_row["y"])
+        reprojected_u, reprojected_v = world_to_image_uv(metadata, world_x, world_y)
+        error = math.hypot(reprojected_u - clicked_u, reprojected_v - clicked_v)
+        rows.append(
+            {
+                "clicked_image_uv": [clicked_u, clicked_v],
+                "error_px": float(error),
+                "idx": waypoint_idx,
+                "kind": image_row.get("kind", world_row.get("kind")),
+                "reprojected_image_uv": [reprojected_u, reprojected_v],
+                "world_xy": [world_x, world_y],
+            }
+        )
+    errors = [float(row["error_px"]) for row in rows]
+    over = [row for row in rows if float(row["error_px"]) > float(threshold_px)]
+    return {
+        "checked": True,
+        "failures": failures,
+        "max_error_px": max(errors) if errors else None,
+        "mean_error_px": float(np.mean(errors)) if errors else None,
+        "ok": (not failures) and bool(rows) and not over,
+        "threshold_px": float(threshold_px),
+        "waypoints": rows,
+        "waypoints_over_threshold": over,
+    }
+
+
+def route_metadata_alignment_failures(
+    manual_route_dir: str | Path,
+    *,
+    expected_metadata_name: str = ALIGNED_PHOTOREAL_METADATA_NAME,
+    expected_axis_preset: str = DEFAULT_ALIGNED_PHOTOREAL_AXIS_PRESET,
+) -> list[str]:
+    route_dir = Path(manual_route_dir)
+    failures: list[str] = []
+    info = manual_route_alignment_info(route_dir)
+    if info.get("axis_preset") != expected_axis_preset:
+        failures.append(f"route metadata axis_preset is not {expected_axis_preset}: {info.get('axis_preset')!r}")
+    if info.get("alignment_transform_source") != "axis_preset":
+        failures.append(f"route metadata alignment_transform_source is not axis_preset: {info.get('alignment_transform_source')!r}")
+    metadata_path_used = str(info.get("metadata_path_used") or "")
+    if not metadata_path_used.endswith(expected_metadata_name):
+        failures.append(f"route metadata path used does not end with {expected_metadata_name}: {metadata_path_used!r}")
+    if info.get("stale_marker_exists"):
+        failures.append(f"STALE_TRANSFORM_WARNING.txt exists under {route_dir}")
+    return failures
 
 
 def _image_heading_endpoint_from_yaw(
@@ -687,6 +789,7 @@ def _manual_route_documents(
     heading_debug_enabled: bool = False,
 ) -> dict[str, Any]:
     metadata = read_json(metadata_path)
+    metadata_sha = file_sha256(metadata_path)
     metadata_alignment = photoreal_metadata_alignment_info(metadata, metadata_path=metadata_path)
     needs_aligned_metadata = requires_aligned_photoreal_metadata(base_image, metadata)
     start_pose = [float(v) for v in (start_pose_world or metadata.get("start_pose_world") or [])]
@@ -766,6 +869,7 @@ def _manual_route_documents(
         "metadata_alignment_warning": None if metadata_alignment["aligned"] else metadata_alignment.get("metadata_alignment_warning"),
         "metadata_axis_preset": metadata_alignment.get("axis_preset"),
         "metadata_path_used": Path(metadata_path).as_posix(),
+        "metadata_sha256": metadata_sha,
         "pending_missing_heading": pending_missing_heading,
         "pending_waypoint_image": pending_image,
         "pending_waypoint_world": pending_world,
@@ -780,6 +884,8 @@ def _manual_route_documents(
     }
     world_doc = {
         "all_user_waypoints_have_yaw": all_have_yaw,
+        "alignment_transform_source": metadata_alignment.get("alignment_transform_source"),
+        "axis_preset": metadata_alignment.get("axis_preset"),
         "final_save_completed": bool(final_save_completed),
         "force_quit": bool(force_quit),
         "full_waypoints": full_world_rows,
@@ -788,6 +894,7 @@ def _manual_route_documents(
         "metadata_alignment_warning": None if metadata_alignment["aligned"] else metadata_alignment.get("metadata_alignment_warning"),
         "metadata_axis_preset": metadata_alignment.get("axis_preset"),
         "metadata_path_used": Path(metadata_path).as_posix(),
+        "metadata_sha256": metadata_sha,
         "pending_missing_heading": pending_missing_heading,
         "pending_waypoint_image": pending_image,
         "pending_waypoint_world": pending_world,
@@ -802,14 +909,19 @@ def _manual_route_documents(
     }
     route_metadata = {
         "base_image": Path(base_image).as_posix(),
+        "base_image_path": Path(base_image).as_posix(),
         "base_map_type": metadata.get("base_map_type"),
         "coordinate_convention": metadata.get("coordinate_convention", COORDINATE_CONVENTION),
+        "alignment_transform_source": metadata_alignment.get("alignment_transform_source"),
+        "axis_preset": metadata_alignment.get("axis_preset"),
+        "image_to_world_transform": metadata.get("image_to_world_transform") or metadata.get("image_to_world"),
         "map_dir": Path(map_dir).as_posix(),
         "metadata_alignment_transform_source": metadata_alignment.get("alignment_transform_source"),
         "metadata_alignment_warning": None if metadata_alignment["aligned"] else metadata_alignment.get("metadata_alignment_warning"),
         "metadata_axis_preset": metadata_alignment.get("axis_preset"),
         "metadata_path": Path(metadata_path).as_posix(),
         "metadata_path_used": Path(metadata_path).as_posix(),
+        "metadata_sha256": metadata_sha,
         "notes": [
             "Manual route starts from the recorded start pose; each user waypoint records both position and yaw.",
             "No automatic route overlay, direction indicators, or coverage planner route was used for annotation.",
@@ -838,6 +950,7 @@ def _manual_route_documents(
         "warnings": warnings,
         "waypoint_count": len(full_world_rows),
         "waypoints_snapped_to_traversable_map": False,
+        "world_to_image_transform": metadata.get("world_to_image_transform") or metadata.get("world_to_image"),
         "yaw_convention": YAW_CONVENTION,
     }
     if heading_debug_enabled:
@@ -1931,12 +2044,17 @@ def build_and_write_manual_trajectory(
 ) -> dict[str, Any]:
     bundle = load_map_bundle(map_dir)
     waypoints = read_json(manual_waypoints)
+    manual_waypoints_path = Path(manual_waypoints)
+    manual_route_dir = manual_waypoints_path.parent
     route_alignment = manual_route_alignment_info(manual_waypoints)
-    if require_route_metadata_aligned and not route_alignment["aligned"]:
-        raise ValueError(
-            "manual route was saved with a stale or missing photoreal image/world transform; "
-            "re-annotate with photoreal_topdown_metadata_aligned.json"
-        )
+    if require_route_metadata_aligned:
+        alignment_failures = route_metadata_alignment_failures(manual_route_dir)
+        if alignment_failures:
+            raise ValueError(
+                "manual route was saved with a stale or missing photoreal image/world transform; "
+                "re-annotate with photoreal_topdown_metadata_aligned.json: "
+                + "; ".join(alignment_failures)
+            )
     preview_alignment: dict[str, Any] = {
         "aligned": False,
         "alignment_transform_source": None,
@@ -1944,12 +2062,41 @@ def build_and_write_manual_trajectory(
         "metadata_path": None,
     }
     preview_metadata_path: Path | None = None
+    preview_metadata_doc: dict[str, Any] | None = None
     if preview_metadata:
         preview_metadata_path = Path(preview_metadata)
     elif DEFAULT_PHOTOREAL_PREVIEW_METADATA.exists():
         preview_metadata_path = DEFAULT_PHOTOREAL_PREVIEW_METADATA
     if preview_metadata_path and preview_metadata_path.exists():
-        preview_alignment = photoreal_metadata_alignment_info(read_json(preview_metadata_path), metadata_path=preview_metadata_path)
+        preview_metadata_doc = read_json(preview_metadata_path)
+        preview_alignment = photoreal_metadata_alignment_info(preview_metadata_doc, metadata_path=preview_metadata_path)
+    if require_route_metadata_aligned and route_alignment.get("metadata_sha256") and preview_metadata_path and preview_metadata_path.exists():
+        preview_sha = file_sha256(preview_metadata_path)
+        if route_alignment.get("metadata_sha256") != preview_sha:
+            raise ValueError(
+                "manual route was saved with a different photoreal metadata file; "
+                "re-annotate with photoreal_topdown_metadata_aligned.json"
+            )
+    projection_roundtrip_stats = {
+        "projection_roundtrip_checked": False,
+        "projection_roundtrip_max_error_px": None,
+        "projection_roundtrip_mean_error_px": None,
+        "projection_roundtrip_ok": None,
+    }
+    if (manual_route_dir / "manual_waypoints_image.json").exists() and preview_metadata_doc is not None:
+        roundtrip = manual_route_projection_roundtrip(manual_route_dir=manual_route_dir, metadata=preview_metadata_doc)
+        projection_roundtrip_stats = {
+            "projection_roundtrip_checked": True,
+            "projection_roundtrip_max_error_px": roundtrip.get("max_error_px"),
+            "projection_roundtrip_mean_error_px": roundtrip.get("mean_error_px"),
+            "projection_roundtrip_ok": bool(roundtrip.get("ok")),
+        }
+        max_error = roundtrip.get("max_error_px")
+        if roundtrip.get("failures") or max_error is None or float(max_error) > 5.0:
+            raise ValueError(
+                "Manual route image/world transform mismatch. Re-annotate with aligned metadata. "
+                f"max_error_px={max_error}, failures={roundtrip.get('failures')}"
+            )
     route_preview_consistent = bool(
         route_alignment["aligned"]
         and preview_alignment["aligned"]
@@ -2037,6 +2184,7 @@ def build_and_write_manual_trajectory(
             "preview_metadata_alignment_transform_source": preview_alignment.get("alignment_transform_source"),
             "preview_metadata_axis_preset": preview_alignment.get("axis_preset"),
             "preview_metadata_path_used": preview_alignment.get("metadata_path"),
+            **projection_roundtrip_stats,
             "route_metadata_alignment_transform_source": route_alignment.get("alignment_transform_source"),
             "route_metadata_axis_preset": route_alignment.get("axis_preset"),
             "route_metadata_path": route_alignment.get("metadata_path"),
