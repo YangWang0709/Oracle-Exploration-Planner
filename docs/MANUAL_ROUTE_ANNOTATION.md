@@ -560,7 +560,11 @@ Optional multisensor replay uses the same manual trajectory and keeps every sens
   --max-frames 50
 ```
 
-See `docs/MULTISENSOR_AND_ROS2_SLAM.md` for LiDAR availability, ROS2 topic planning, rosbag QA, and 2D SLAM follow-up. The offline multisensor dataset is the primary product; ROS2/rosbag/SLAM are optional integrations.
+See `docs/MULTISENSOR_AND_ROS2_SLAM.md` for LiDAR availability, true offline
+dataset -> rosbag2 export, `slam_toolbox` map generation, rosbag QA, map QA,
+and RViz commands. The offline multisensor dataset remains the primary Isaac
+collection product, but ROS2/SLAM now has a real rosbag2 path and will only
+report success when non-empty `map.pgm` and `map.yaml` are generated.
 
 ## Start Pose
 

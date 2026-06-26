@@ -51,6 +51,11 @@ def _import_available(module_name: str) -> tuple[bool, str | None]:
 def detect_ros2_environment() -> dict[str, Any]:
     ros2 = shutil.which("ros2")
     rclpy_available, rclpy_error = _import_available("rclpy")
+    rosbag2_py_available, rosbag2_py_error = _import_available("rosbag2_py")
+    message_imports: dict[str, Any] = {}
+    for module_name in ("sensor_msgs", "nav_msgs", "geometry_msgs", "tf2_msgs", "rosgraph_msgs", "std_msgs"):
+        ok, err = _import_available(module_name)
+        message_imports[module_name] = {"available": ok, "error": err}
     omni_available, omni_error = _import_available("omni")
     bridge_modules: list[str] = []
     bridge_failures: dict[str, str] = {}
@@ -67,11 +72,16 @@ def detect_ros2_environment() -> dict[str, Any]:
         "isaac_ros2_bridge_failures": bridge_failures,
         "isaac_ros2_bridge_modules": bridge_modules,
         "nav2_available": _pkg_available("nav2_bringup"),
+        "nav2_map_server_available": _pkg_available("nav2_map_server"),
         "pointcloud_to_laserscan_available": _pkg_available("pointcloud_to_laserscan"),
         "rclpy_available": rclpy_available,
         "rclpy_error": rclpy_error,
+        "ros2_message_imports": message_imports,
         "ros2_available": bool(ros2),
         "ros2_path": ros2,
+        "rosbag2_py_available": rosbag2_py_available,
+        "rosbag2_py_error": rosbag2_py_error,
+        "rosbag2_transport_available": _pkg_available("rosbag2_transport"),
         "ros_distro": os.environ.get("ROS_DISTRO"),
         "rtabmap_available": _pkg_available("rtabmap_ros"),
         "rviz2_available": _pkg_available("rviz2"),
