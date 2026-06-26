@@ -185,6 +185,20 @@ python scripts/manual_route_annotator.py \
   --require-aligned-metadata
 ```
 
+Optional heading transform debug:
+
+```bash
+python scripts/manual_route_annotator.py \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
+  --require-aligned-metadata \
+  --debug-heading
+```
+
+`--debug-heading` is optional. It shows heading conversion details in the annotator status bar, prints the waypoint pixel, heading pixel, waypoint world, heading world, yaw, and axis preset after each heading click, and records `heading_debug_enabled=true` in `manual_route_metadata.json`. It does not change saved waypoint coordinates, yaw calculation, autosave behavior, or trajectory building.
+
 By default the annotator reloads an existing final route or autosave in `--out` so work is not lost. To intentionally start over, add `--fresh`; the old `manual_route` directory is backed up to `manual_route_backup_<timestamp>` before the empty route starts:
 
 ```bash

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -7,7 +9,10 @@ from PIL import Image
 
 from oracle_explorer.io_utils import read_json, write_json_atomic
 from oracle_explorer.manual_route import save_manual_route_annotation, save_manual_route_autosave
-from scripts.manual_route_annotator import maybe_load_existing_annotation, prepare_fresh_annotation_output
+from scripts.manual_route_annotator import maybe_load_existing_annotation, parse_args, prepare_fresh_annotation_output
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _base(tmp_path: Path) -> tuple[Path, Path]:
@@ -127,3 +132,49 @@ def test_default_mode_reports_autosave_without_overwriting(tmp_path: Path) -> No
     assert result["source"] == "autosave"
     assert "Autosave found" in result["status"]
     assert read_json(root / "autosave" / "manual_waypoints_world.autosave.json")["user_waypoints"]
+
+
+def test_manual_route_annotator_help_includes_debug_heading() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/manual_route_annotator.py", "--help"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--debug-heading" in result.stdout
+
+
+def test_manual_route_annotator_argparse_accepts_debug_heading() -> None:
+    args = parse_args(
+        [
+            "--base-image",
+            "base.png",
+            "--metadata",
+            "metadata.json",
+            "--map-dir",
+            "map",
+            "--out",
+            "manual_route",
+            "--debug-heading",
+        ]
+    )
+
+    assert args.debug_heading is True
+
+
+def test_debug_heading_flag_is_saved_to_route_metadata(tmp_path: Path) -> None:
+    image_path, metadata_path = _base(tmp_path)
+    root = tmp_path / "manual_route"
+
+    paths = save_manual_route_annotation(
+        base_image=image_path,
+        metadata_path=metadata_path,
+        map_dir=tmp_path / "map",
+        out_dir=root,
+        image_waypoints=[_waypoint()],
+        heading_debug_enabled=True,
+    )
+
+    assert read_json(paths["manual_route_metadata"])["heading_debug_enabled"] is True

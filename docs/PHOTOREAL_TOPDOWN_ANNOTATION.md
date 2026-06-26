@@ -76,6 +76,8 @@ python scripts/manual_route_annotator.py \
 
 For seed 201 photoreal topdown annotation, use `photoreal_topdown_metadata_aligned.json`. Do not use the original `photoreal_topdown_metadata.json` for manual route annotation.
 
+To inspect heading alignment while annotating, add the optional `--debug-heading` flag to the same command. It shows the live heading transform in the status bar, prints pixel/world/yaw details after each heading click, and records `heading_debug_enabled=true` in `manual_route_metadata.json`. It is debug-only and does not affect route saving or trajectory building.
+
 If you are deliberately re-annotating an existing route, add `--fresh`. Fresh mode starts with an empty route and backs up the existing `manual_route` directory to `manual_route_backup_<timestamp>`. Without `--fresh`, the annotator still loads existing final route files or autosave to prevent accidental data loss.
 
 The annotator runs in hard autosave mode. Each route-changing operation writes `manual_route/autosave/`, every completed waypoint pose final-saves the route, and lowercase `q` final-saves before quitting when no pending waypoint is missing heading. Lowercase `s` or `Ctrl+S` remains available as a manual extra save, but you no longer need to rely on it. Uppercase `S` sets the current cursor as the start pose; it does not save. Uppercase `Q` force-quits and writes autosave, but does not final-save an incomplete pending point. After saving, verify:

@@ -9,7 +9,7 @@ import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from PIL import Image
 
@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from oracle_explorer.io_utils import read_json
 from oracle_explorer.manual_route import (
+    compute_yaw_from_image_heading,
     image_heading_point_from_yaw,
     image_to_world_xy,
     load_manual_route_annotation_state,
@@ -43,7 +44,7 @@ HELP = (
 )
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Annotate a manual route on a top-down base image.")
     parser.add_argument("--base-image", required=True)
     parser.add_argument("--metadata", required=True)
@@ -54,7 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-start-clearance-m", type=float, default=0.30)
     parser.add_argument("--require-aligned-metadata", action="store_true")
     parser.add_argument("--fresh", action="store_true", help="Start a new empty route and back up any existing --out directory first.")
-    return parser.parse_args()
+    parser.add_argument("--debug-heading", action="store_true", help="Print and display image/world heading conversion details while annotating.")
+    return parser.parse_args(argv)
 
 
 def _initial_start(args: argparse.Namespace, metadata: dict[str, Any], map_bundle: dict[str, Any]) -> dict[str, Any]:
@@ -141,6 +143,30 @@ def maybe_load_existing_annotation(out_dir: str | Path, state: dict[str, Any]) -
     return {"loaded": False, "status": state.get("status"), "source": None}
 
 
+def _axis_preset_from_metadata(metadata: dict[str, Any]) -> Any:
+    return (
+        metadata.get("axis_preset")
+        or metadata.get("obstacle_alignment_axis_mapping_preset")
+        or metadata.get("photoreal_obstacle_alignment_axis_preset")
+        or metadata.get("metadata_axis_preset")
+    )
+
+
+def _format_pair(values: Sequence[float], *, precision: int = 3) -> str:
+    return f"({float(values[0]):.{precision}f}, {float(values[1]):.{precision}f})"
+
+
+def _print_heading_debug(debug: dict[str, Any], *, axis_preset: Any) -> None:
+    print("Heading debug:")
+    print(f"  waypoint pixel uv: {_format_pair(debug['waypoint_image_uv'])}")
+    print(f"  heading pixel uv: {_format_pair(debug['heading_image_uv'])}")
+    print(f"  waypoint world xy: {_format_pair(debug['waypoint_world_xy'])}")
+    print(f"  heading world xy: {_format_pair(debug['heading_world_xy'])}")
+    print(f"  yaw rad: {float(debug['yaw']):.6f}")
+    print(f"  yaw deg: {float(debug['yaw_deg']):.3f}")
+    print(f"  axis_preset: {axis_preset}")
+
+
 def main() -> None:
     args = parse_args()
     base_image = Path(args.base_image)
@@ -158,7 +184,9 @@ def main() -> None:
     import matplotlib.pyplot as plt
 
     state: dict[str, Any] = {
+        "cursor_world": None,
         "last_cursor": None,
+        "last_heading_debug": None,
         "last_saved_time": None,
         "close_after_final_save": False,
         "force_quit_requested": False,
@@ -196,7 +224,27 @@ def main() -> None:
     def status_title() -> str:
         saved = f"last saved: {state['last_saved_time']}" if state.get("last_saved_time") else "not saved"
         dirty = "unsaved" if state.get("unsaved_changes") else "saved"
-        return f"{state['status']} | {dirty} | {saved}\nout: {Path(args.out).resolve()}\n{HELP}"
+        status = str(state["status"])
+        cursor_world = state.get("cursor_world")
+        if cursor_world is not None:
+            status = f"{status} | world: x={float(cursor_world[0]):.3f}, y={float(cursor_world[1]):.3f}"
+        lines = [f"{status} | {dirty} | {saved}", f"out: {Path(args.out).resolve()}"]
+        if args.debug_heading:
+            debug = state.get("last_heading_debug")
+            if debug is not None:
+                lines.append(
+                    "heading debug: "
+                    f"wp_uv={_format_pair(debug['waypoint_image_uv'], precision=1)} "
+                    f"hd_uv={_format_pair(debug['heading_image_uv'], precision=1)} "
+                    f"wp_xy={_format_pair(debug['waypoint_world_xy'])} "
+                    f"hd_xy={_format_pair(debug['heading_world_xy'])} "
+                    f"yaw={float(debug['yaw']):.3f} rad/{float(debug['yaw_deg']):.1f} deg "
+                    f"axis_preset={_axis_preset_from_metadata(metadata)}"
+                )
+            else:
+                lines.append(f"heading debug: enabled | axis_preset={_axis_preset_from_metadata(metadata)}")
+        lines.append(HELP)
+        return "\n".join(lines)
 
     def add_arrow(u: float, v: float, yaw: float, *, color: str, length: float = 44.0) -> None:
         hu, hv = image_heading_point_from_yaw(metadata, float(u), float(v), float(yaw), length_px=float(length))
@@ -268,6 +316,7 @@ def main() -> None:
                 random_seed=state["random_seed"],
                 force_quit=force_quit,
                 final_save_completed=final_save_completed,
+                heading_debug_enabled=bool(args.debug_heading),
             )
             print(f"AUTOSAVED draft route: {paths['manual_waypoints_world_autosave'].resolve()}")
             return True
@@ -300,6 +349,7 @@ def main() -> None:
                 start_pose_world=state["start_pose_world"],
                 start_pose_source=state["start_pose_source"],
                 random_seed=state["random_seed"],
+                heading_debug_enabled=bool(args.debug_heading),
             )
         except Exception as exc:
             message = f"SAVE FAILED: {type(exc).__name__}: {exc}"
@@ -441,11 +491,15 @@ def main() -> None:
                 autosave(final_save_completed=False)
             else:
                 try:
-                    yaw = yaw_from_image_heading(metadata, float(pending["u"]), float(pending["v"]), float(event.xdata), float(event.ydata))
+                    debug = compute_yaw_from_image_heading(metadata, float(pending["u"]), float(pending["v"]), float(event.xdata), float(event.ydata))
                 except ValueError:
                     set_status("Heading click must differ from waypoint position")
                     draw()
                     return
+                yaw = float(debug["yaw"])
+                state["last_heading_debug"] = debug
+                if args.debug_heading:
+                    _print_heading_debug(debug, axis_preset=_axis_preset_from_metadata(metadata))
                 pending["heading_u"] = float(event.xdata)
                 pending["heading_v"] = float(event.ydata)
                 pending["yaw"] = yaw
@@ -463,7 +517,20 @@ def main() -> None:
         if event.inaxes == ax and event.xdata is not None and event.ydata is not None:
             state["last_cursor"] = (float(event.xdata), float(event.ydata))
             x, y = image_to_world_xy(metadata, float(event.xdata), float(event.ydata))
-            ax.set_title(f"{state['status']} | world: x={x:.3f}, y={y:.3f}\n{HELP}")
+            state["cursor_world"] = [x, y]
+            pending = state.get("pending_waypoint")
+            if args.debug_heading and pending is not None:
+                try:
+                    state["last_heading_debug"] = compute_yaw_from_image_heading(
+                        metadata,
+                        float(pending["u"]),
+                        float(pending["v"]),
+                        float(event.xdata),
+                        float(event.ydata),
+                    )
+                except ValueError:
+                    state["last_heading_debug"] = None
+            ax.set_title(status_title())
             if state.get("pending_waypoint") is not None:
                 draw()
             else:

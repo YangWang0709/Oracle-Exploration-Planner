@@ -684,6 +684,7 @@ def _manual_route_documents(
     pending_waypoint: dict[str, Any] | None = None,
     force_quit: bool = False,
     final_save_completed: bool = True,
+    heading_debug_enabled: bool = False,
 ) -> dict[str, Any]:
     metadata = read_json(metadata_path)
     metadata_alignment = photoreal_metadata_alignment_info(metadata, metadata_path=metadata_path)
@@ -839,6 +840,8 @@ def _manual_route_documents(
         "waypoints_snapped_to_traversable_map": False,
         "yaw_convention": YAW_CONVENTION,
     }
+    if heading_debug_enabled:
+        route_metadata["heading_debug_enabled"] = True
     return {
         "full_image_rows": full_image_rows,
         "full_world_rows": full_world_rows,
@@ -935,6 +938,7 @@ def save_manual_route_annotation(
     start_pose_world: Sequence[float] | None = None,
     start_pose_source: str | None = None,
     random_seed: int | None = None,
+    heading_debug_enabled: bool = False,
 ) -> dict[str, Path]:
     docs = _manual_route_documents(
         base_image=base_image,
@@ -944,6 +948,7 @@ def save_manual_route_annotation(
         start_pose_world=start_pose_world,
         start_pose_source=start_pose_source,
         random_seed=random_seed,
+        heading_debug_enabled=heading_debug_enabled,
     )
     out = ensure_dir(out_dir)
     paths = {
@@ -991,6 +996,7 @@ def save_manual_route_autosave(
     random_seed: int | None = None,
     force_quit: bool = False,
     final_save_completed: bool = False,
+    heading_debug_enabled: bool = False,
 ) -> dict[str, Path]:
     docs = _manual_route_documents(
         base_image=base_image,
@@ -1003,6 +1009,7 @@ def save_manual_route_autosave(
         random_seed=random_seed,
         force_quit=force_quit,
         final_save_completed=final_save_completed,
+        heading_debug_enabled=heading_debug_enabled,
     )
     out = ensure_dir(Path(out_dir) / "autosave")
     paths = {
