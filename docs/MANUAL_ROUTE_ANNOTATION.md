@@ -270,18 +270,24 @@ Build the manual trajectory:
 python scripts/build_manual_trajectory.py \
   --manual-waypoints "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route/manual_waypoints_world.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
+  --usd-obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory" \
   --step-size 0.25 \
   --snap-to-traversable \
   --connect-with-astar \
   --yaw-mode annotated \
   --yaw-interpolation shortest \
+  --prefer-usd-obstacle-map \
+  --collision-check-mode planning_obstacle \
   --preview-base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
   --preview-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
   --preview-mode photoreal \
   --draw-heading-arrows \
-  --draw-waypoint-labels
+  --draw-waypoint-labels \
+  --draw-planning-obstacles
 ```
+
+After the USD obstacle overlay has been visually confirmed against the photoreal topdown image, manual trajectory building should use `usd_obstacle_map_v1/planning_obstacle_grid.npy` for snap, A*, and collision checks. `debug_inflated_obstacle_grid.npy` is a conservative safety reference and is not the default route blocker.
 
 Manual trajectory outputs:
 
@@ -290,6 +296,8 @@ Manual trajectory outputs:
 - `manual_actions.jsonl`
 - `manual_trajectory_stats.json`
 - `manual_trajectory_preview_photoreal.png`: final A*/snap/dense trajectory preview over the photoreal topdown annotation base.
+- `manual_trajectory_preview_photoreal_with_obstacles.png`: final dense trajectory over photoreal topdown with the USD planning obstacle overlay.
+- `manual_trajectory_preview_obstacle_qa.png`: raw/planning/debug obstacle QA overlay.
 - `manual_trajectory_preview_map.png`: debug map preview only.
 - `manual_trajectory_preview.png`: compatibility copy of the photoreal preview when the photoreal base is available.
 - `manual_trajectory_preview_metadata.json`
@@ -298,9 +306,10 @@ Open the photoreal dense preview first:
 
 ```bash
 xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_trajectory_preview_photoreal.png"
+xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_trajectory_preview_photoreal_with_obstacles.png"
 ```
 
-Use the map/debug preview only to diagnose traversability or snapping; it is not the primary route review image.
+Use the obstacle preview to confirm the final route stays outside `planning_obstacle_grid.npy`. If a route enters a planning obstacle, re-annotate or adjust the route. Entering only `debug_inflated_obstacle_grid.npy` is a warning, not necessarily an error.
 
 `manual_dense_trajectory.jsonl` stores `base_pose_world=[x, y, yaw]` for every frame, plus `yaw_source`, `nearest_manual_waypoint_idx`, `route_source=manual`, and `pose_annotation_mode=position_plus_yaw`. A* connects waypoint positions only; dense trajectory yaw comes from the user-annotated waypoint yaw with shortest-angle interpolation.
 
@@ -310,7 +319,12 @@ Run QA:
 python scripts/qa_manual_route.py \
   --manual-route-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
   --manual-trajectory-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory" \
-  --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender"
+  --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
+  --usd-obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1"
+
+python scripts/qa_manual_trajectory_usd_obstacles.py \
+  --manual-trajectory-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory" \
+  --usd-obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1"
 
 python scripts/qa_manual_trajectory_preview.py \
   --manual-trajectory-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory"

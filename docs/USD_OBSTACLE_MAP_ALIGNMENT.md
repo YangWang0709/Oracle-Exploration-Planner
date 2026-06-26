@@ -198,10 +198,33 @@ If the overlay is misaligned, do not rerun or modify the manual trajectory yet. 
 - object classification in `usd_obstacle_objects.json`
 - wall/large furniture bbox or footprint rasterization
 
-## Next Step After Alignment
+## Manual Trajectory Use After Alignment
 
-Only after the user confirms the USD obstacle overlay is aligned should the next stage update `scripts/build_manual_trajectory.py` to use:
+After the user confirms the USD obstacle overlay is aligned, build manual trajectories with:
 
 `outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1/planning_obstacle_grid.npy`
 
-as the collision map for manual trajectory building. `debug_inflated_obstacle_grid.npy` is for clearance warnings and visual QA only. That route change is intentionally not part of this alignment stage.
+as the default snap, A*, and collision blocker:
+
+```bash
+python scripts/build_manual_trajectory.py \
+  --manual-waypoints "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route/manual_waypoints_world.json" \
+  --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
+  --usd-obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory" \
+  --step-size 0.25 \
+  --snap-to-traversable \
+  --connect-with-astar \
+  --yaw-mode annotated \
+  --yaw-interpolation shortest \
+  --prefer-usd-obstacle-map \
+  --collision-check-mode planning_obstacle \
+  --preview-base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --preview-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --preview-mode photoreal \
+  --draw-heading-arrows \
+  --draw-waypoint-labels \
+  --draw-planning-obstacles
+```
+
+`planning_obstacle_grid.npy` is the default blocker. `debug_inflated_obstacle_grid.npy` is a conservative safety reference for QA and should not be used as the default planning blocker because it can close doors and narrow passages. Open `manual_trajectory_preview_photoreal_with_obstacles.png` after building; any raw/planning obstacle collision means the route should be re-annotated or fixed, while debug-inflated-only entries are warnings.

@@ -39,6 +39,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preview-stride", type=int, default=10)
     parser.add_argument("--draw-heading-arrows", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--draw-waypoint-labels", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--usd-obstacle-map-dir", default=None)
+    parser.add_argument("--planning-obstacle-grid", default=None)
+    parser.add_argument("--raw-obstacle-grid", default=None)
+    parser.add_argument("--clearance-distance-map", default=None)
+    parser.add_argument("--prefer-usd-obstacle-map", action="store_true")
+    parser.add_argument("--require-usd-obstacle-map", action="store_true")
+    parser.add_argument(
+        "--collision-check-mode",
+        choices=("planning_obstacle", "raw_obstacle", "debug_inflated"),
+        default="planning_obstacle",
+    )
+    parser.add_argument("--allow-planning-obstacle-collisions", action="store_true")
+    parser.add_argument("--draw-planning-obstacles", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--draw-raw-obstacles", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--draw-debug-inflated-obstacles", action=argparse.BooleanOptionalAction, default=False)
     return parser.parse_args()
 
 
@@ -208,7 +223,20 @@ def main() -> None:
             preview_stride=int(args.preview_stride),
             draw_heading_arrows=bool(args.draw_heading_arrows),
             draw_waypoint_labels=bool(args.draw_waypoint_labels),
+            usd_obstacle_map_dir=args.usd_obstacle_map_dir,
+            planning_obstacle_grid=args.planning_obstacle_grid,
+            raw_obstacle_grid=args.raw_obstacle_grid,
+            clearance_distance_map=args.clearance_distance_map,
+            prefer_usd_obstacle_map=bool(args.prefer_usd_obstacle_map),
+            require_usd_obstacle_map=bool(args.require_usd_obstacle_map),
+            collision_check_mode=args.collision_check_mode,
+            allow_planning_obstacle_collisions=bool(args.allow_planning_obstacle_collisions),
+            draw_planning_obstacles=bool(args.draw_planning_obstacles),
+            draw_raw_obstacles=bool(args.draw_raw_obstacles),
+            draw_debug_inflated_obstacles=bool(args.draw_debug_inflated_obstacles),
         )
+    for warning in result.get("stats", {}).get("warnings", []) or []:
+        print(f"WARNING: {warning}", file=sys.stderr)
     print(json.dumps(result, indent=2, sort_keys=True))
 
 

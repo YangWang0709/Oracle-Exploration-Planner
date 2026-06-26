@@ -19,11 +19,20 @@ from .grid import (
     in_bounds,
     load_grid,
     path_is_collision_free,
+    reachable_mask,
     world_to_grid,
 )
 from .io_utils import ensure_dir, read_json, read_jsonl, write_json, write_json_atomic, write_jsonl, write_text_atomic
 from .start_sampling import validate_start_pose
 from .trajectory import path_to_poses, poses_to_records
+from .usd_obstacle_route import (
+    DEBUG_INFLATED_WARNING,
+    compare_map_grid_to_usd_obstacle_map,
+    compute_trajectory_obstacle_stats,
+    load_usd_obstacle_planning_map,
+    select_collision_obstacle_grid,
+    usd_obstacle_grid_meta,
+)
 
 
 COORDINATE_CONVENTION = (
@@ -341,6 +350,11 @@ def render_manual_trajectory_preview_on_base_image(
     preview_stride: int = 10,
     draw_heading_arrows: bool = True,
     draw_waypoint_labels: bool = True,
+    usd_obstacle_bundle: dict[str, Any] | None = None,
+    draw_planning_obstacles: bool = False,
+    draw_raw_obstacles: bool = False,
+    draw_debug_inflated_obstacles: bool = False,
+    collision_frame_indices: Sequence[int] | None = None,
 ) -> dict[str, Any]:
     """Render manual dense trajectory and sparse poses on the annotation base image."""
 
@@ -349,7 +363,43 @@ def render_manual_trajectory_preview_on_base_image(
     metadata = read_json(metadata_file)
     image = Image.open(base_path).convert("RGB")
     width, height = image.size
+    projected_metadata = metadata
+    drawn_obstacle_overlays: list[str] = []
+    if usd_obstacle_bundle is not None:
+        from .usd_obstacle_alignment import grid_mask_to_image_mask, obstacle_alignment_metadata, overlay_mask_on_image
+
+        projected_metadata = obstacle_alignment_metadata(metadata, usd_obstacle_bundle)
+        grid_meta = usd_obstacle_grid_meta(usd_obstacle_bundle)
+        image_shape = (height, width)
+        if draw_debug_inflated_obstacles:
+            mask = grid_mask_to_image_mask(
+                usd_obstacle_bundle["debug_inflated_obstacle_grid"],
+                grid_meta,
+                projected_metadata,
+                image_shape,
+            )
+            image = overlay_mask_on_image(image, mask, color=(150, 70, 220), alpha=0.20).convert("RGB")
+            drawn_obstacle_overlays.append("debug_inflated_obstacle_grid")
+        if draw_planning_obstacles:
+            mask = grid_mask_to_image_mask(
+                usd_obstacle_bundle["planning_obstacle_grid"],
+                grid_meta,
+                projected_metadata,
+                image_shape,
+            )
+            image = overlay_mask_on_image(image, mask, color=(255, 130, 25), alpha=0.28).convert("RGB")
+            drawn_obstacle_overlays.append("planning_obstacle_grid")
+        if draw_raw_obstacles:
+            mask = grid_mask_to_image_mask(
+                usd_obstacle_bundle["raw_obstacle_grid"],
+                grid_meta,
+                projected_metadata,
+                image_shape,
+            )
+            image = overlay_mask_on_image(image, mask, color=(225, 30, 50), alpha=0.34).convert("RGB")
+            drawn_obstacle_overlays.append("raw_obstacle_grid")
     draw = ImageDraw.Draw(image)
+    collision_frames = {int(value) for value in (collision_frame_indices or [])}
 
     dense_projected: list[dict[str, Any]] = []
     dense_in_bounds_count = 0
@@ -359,12 +409,13 @@ def render_manual_trajectory_preview_on_base_image(
             continue
         x, y, yaw = pose
         try:
-            u, v = world_to_image_uv(metadata, x, y)
+            u, v = world_to_image_uv(projected_metadata, x, y)
         except Exception:
             continue
         in_bounds_image = _image_in_bounds(u, v, width, height)
         dense_in_bounds_count += int(in_bounds_image)
-        dense_projected.append({"idx": idx, "u": u, "v": v, "yaw": yaw, "in_bounds": in_bounds_image})
+        frame_idx = int(record.get("frame_idx", idx))
+        dense_projected.append({"frame_idx": frame_idx, "idx": idx, "u": u, "v": v, "yaw": yaw, "in_bounds": in_bounds_image})
 
     sparse_projected: list[dict[str, Any]] = []
     sparse_in_bounds_count = 0
@@ -374,7 +425,7 @@ def render_manual_trajectory_preview_on_base_image(
             continue
         x, y, yaw = pose
         try:
-            u, v = world_to_image_uv(metadata, x, y)
+            u, v = world_to_image_uv(projected_metadata, x, y)
         except Exception:
             continue
         in_bounds_image = _image_in_bounds(u, v, width, height)
@@ -408,6 +459,16 @@ def render_manual_trajectory_preview_on_base_image(
         elif segment:
             u, v = segment[0]
             draw.ellipse((u - path_width, v - path_width, u + path_width, v + path_width), fill=(20, 135, 255))
+
+    collision_marker_count = 0
+    if collision_frames:
+        radius = max(5, int(round(path_width * 1.8)))
+        for point in dense_projected:
+            if not point["in_bounds"] or int(point["frame_idx"]) not in collision_frames:
+                continue
+            u, v = float(point["u"]), float(point["v"])
+            draw.ellipse((u - radius, v - radius, u + radius, v + radius), fill=(255, 0, 0), outline=(255, 255, 255), width=2)
+            collision_marker_count += 1
 
     heading_arrow_count = 0
     stride = max(1, int(preview_stride))
@@ -461,11 +522,16 @@ def render_manual_trajectory_preview_on_base_image(
     sparse_count = len(sparse_projected)
     return {
         "base_image": base_path.as_posix(),
+        "collision_marker_count": collision_marker_count,
         "dense_in_bounds_count": dense_in_bounds_count,
         "dense_in_bounds_ratio": (dense_in_bounds_count / dense_count) if dense_count else 0.0,
         "dense_projected_count": dense_count,
+        "draw_debug_inflated_obstacles": bool(draw_debug_inflated_obstacles),
         "draw_heading_arrows": bool(draw_heading_arrows),
+        "draw_planning_obstacles": bool(draw_planning_obstacles),
+        "draw_raw_obstacles": bool(draw_raw_obstacles),
         "draw_waypoint_labels": bool(draw_waypoint_labels),
+        "drawn_obstacle_overlays": drawn_obstacle_overlays,
         "heading_arrow_count": heading_arrow_count,
         "image_height": height,
         "image_width": width,
@@ -475,8 +541,9 @@ def render_manual_trajectory_preview_on_base_image(
         "preview_stride": stride,
         "sparse_in_bounds_count": sparse_in_bounds_count,
         "sparse_projected_count": sparse_count,
+        "uses_usd_obstacle_alignment_transform": bool(projected_metadata.get("obstacle_alignment_transform_override")),
         "waypoint_heading_arrow_count": waypoint_heading_arrow_count,
-        "world_to_image_transform": metadata.get("world_to_image_transform") or metadata.get("world_to_image"),
+        "world_to_image_transform": projected_metadata.get("world_to_image_transform") or projected_metadata.get("world_to_image"),
     }
 
 
@@ -935,6 +1002,8 @@ def normalize_manual_waypoints(
     traversable_grid: np.ndarray,
     *,
     snap_to_traversable: bool,
+    raw_obstacle_grid: np.ndarray | None = None,
+    planning_obstacle_grid: np.ndarray | None = None,
 ) -> dict[str, Any]:
     reachable = np.asarray(reachable_grid, dtype=bool)
     traversable = np.asarray(traversable_grid, dtype=bool)
@@ -952,14 +1021,26 @@ def normalize_manual_waypoints(
             yaw = 0.0
         else:
             yaw = normalize_yaw(float(wp["yaw"]))
+        original_x = x
+        original_y = y
         cell = world_to_grid(x, y, meta)
         valid = in_bounds(reachable.shape, cell) and bool(valid_mask[cell])
         if not valid:
             invalid_count += 1
+            if not in_bounds(reachable.shape, cell):
+                reason = "outside_planning_free"
+            elif raw_obstacle_grid is not None and bool(np.asarray(raw_obstacle_grid, dtype=bool)[cell]):
+                reason = "inside_raw_obstacle"
+            elif planning_obstacle_grid is not None and bool(np.asarray(planning_obstacle_grid, dtype=bool)[cell]):
+                reason = "inside_planning_obstacle"
+            else:
+                reason = "outside_planning_free"
             issue = {
                 "idx": int(wp.get("idx", idx)),
                 "grid_ij": list(cell),
-                "reason": "out_of_bounds_or_not_reachable",
+                "original_world_xy": [original_x, original_y],
+                "reason": reason,
+                "snap_reason": reason,
                 "world_xy": [x, y],
             }
             if not snap_to_traversable:
@@ -967,7 +1048,13 @@ def normalize_manual_waypoints(
                 continue
             snapped_cell = nearest_reachable_cell(cell, valid_mask)
             sx, sy = grid_to_world(snapped_cell[0], snapped_cell[1], meta)
-            issue.update({"snapped_grid_ij": list(snapped_cell), "snapped_world_xy": [sx, sy]})
+            issue.update(
+                {
+                    "snap_distance_m": math.hypot(sx - original_x, sy - original_y),
+                    "snapped_grid_ij": list(snapped_cell),
+                    "snapped_world_xy": [sx, sy],
+                }
+            )
             issues.append(issue)
             x, y = sx, sy
             cell = snapped_cell
@@ -978,6 +1065,10 @@ def normalize_manual_waypoints(
                 "grid_ij": [int(cell[0]), int(cell[1])],
                 "idx": int(wp.get("idx", idx)),
                 "kind": wp.get("kind", "manual"),
+                "original_x": original_x,
+                "original_y": original_y,
+                "snap_distance_m": math.hypot(x - original_x, y - original_y) if not valid else 0.0,
+                "snap_reason": issue["snap_reason"] if not valid else None,
                 "snapped": not valid,
                 "x": x,
                 "y": y,
@@ -1056,11 +1147,18 @@ def resample_grid_path(path: Sequence[GridIndex], meta: dict[str, Any], step_siz
     result = [path[0]]
     last_x, last_y = grid_to_world(path[0][0], path[0][1], meta)
     carry = 0.0
-    for cell in path[1:]:
+    for idx, cell in enumerate(path[1:], start=1):
         x, y = grid_to_world(cell[0], cell[1], meta)
         carry += math.hypot(x - last_x, y - last_y)
         last_x, last_y = x, y
-        if carry >= step:
+        keep_turn = False
+        if 0 < idx < len(path) - 1:
+            prev_cell = path[idx - 1]
+            next_cell = path[idx + 1]
+            in_dir = (int(cell[0]) - int(prev_cell[0]), int(cell[1]) - int(prev_cell[1]))
+            out_dir = (int(next_cell[0]) - int(cell[0]), int(next_cell[1]) - int(cell[1]))
+            keep_turn = in_dir != out_dir
+        if carry >= step or keep_turn:
             if cell != result[-1]:
                 result.append(cell)
             carry = 0.0
@@ -1176,6 +1274,9 @@ def build_manual_trajectory_data(
     yaw_interpolation: str = "shortest",
     insert_rotation_frames: bool = False,
     rotation_step_deg: float = 10.0,
+    usd_obstacle_bundle: dict[str, Any] | None = None,
+    collision_check_mode: str = "planning_obstacle",
+    allow_planning_obstacle_collisions: bool = False,
 ) -> dict[str, Any]:
     document = manual_waypoint_document_to_sequence(waypoint_document)
     waypoints = document["full_waypoints"]
@@ -1201,6 +1302,8 @@ def build_manual_trajectory_data(
         reachable_grid,
         traversable_grid,
         snap_to_traversable=snap_to_traversable,
+        raw_obstacle_grid=usd_obstacle_bundle.get("raw_obstacle_grid") if usd_obstacle_bundle else None,
+        planning_obstacle_grid=usd_obstacle_bundle.get("planning_obstacle_grid") if usd_obstacle_bundle else None,
     )
     if normalized["issues"] and not snap_to_traversable:
         raise ValueError(f"Manual waypoints are invalid and snapping is disabled: {normalized['issues']}")
@@ -1263,6 +1366,47 @@ def build_manual_trajectory_data(
         row["yaw_source"] = yaw_sources[idx] if idx < len(yaw_sources) else yaw_mode
         row["nearest_manual_waypoint_idx"] = nearest_indices[idx] if idx < len(nearest_indices) else None
     collision_free = path_is_collision_free(full_path, valid_grid)
+    warnings: list[str] = []
+    obstacle_stats: dict[str, Any] = {}
+    if usd_obstacle_bundle is not None:
+        warnings.extend(str(item) for item in usd_obstacle_bundle.get("warnings", []))
+        if collision_check_mode == "debug_inflated":
+            warnings.append(DEBUG_INFLATED_WARNING)
+        obstacle_stats = compute_trajectory_obstacle_stats(records, usd_obstacle_bundle)
+        route_hits_blocker = any(
+            int(obstacle_stats.get(key) or 0) > 0
+            for key in (
+                "points_inside_raw_obstacle",
+                "points_inside_planning_obstacle",
+                "points_outside_obstacle_map_bounds",
+                "segments_crossing_raw_obstacle",
+                "segments_crossing_planning_obstacle",
+                "segments_outside_obstacle_map_bounds",
+            )
+        )
+        if route_hits_blocker:
+            collision_free = False
+        elif int(obstacle_stats.get("points_inside_debug_inflated_obstacle") or 0) > 0 or int(
+            obstacle_stats.get("segments_crossing_debug_inflated_obstacle") or 0
+        ) > 0:
+            warnings.append("route enters conservative debug inflation but not planning obstacle.")
+        if route_hits_blocker and not allow_planning_obstacle_collisions:
+            details = {
+                key: obstacle_stats.get(key)
+                for key in (
+                    "points_inside_raw_obstacle",
+                    "points_inside_planning_obstacle",
+                    "points_outside_obstacle_map_bounds",
+                    "segments_crossing_raw_obstacle",
+                    "segments_crossing_planning_obstacle",
+                    "segments_outside_obstacle_map_bounds",
+                    "first_raw_obstacle_collision",
+                    "first_planning_obstacle_collision",
+                    "first_segment_crossing_raw_obstacle",
+                    "first_segment_crossing_planning_obstacle",
+                )
+            }
+            raise ValueError(f"Manual trajectory intersects USD raw/planning obstacle map: {details}")
     yaw_values = [pose[2] for pose in poses]
     stats = {
         "all_waypoints_have_yaw": bool(yaw_validation["all_waypoints_have_yaw"]),
@@ -1288,7 +1432,9 @@ def build_manual_trajectory_data(
         "total_length_meters": total_path_length(full_path, meta),
         "traversable_check_passed": bool(collision_free),
         "user_waypoint_count": len(document["user_waypoints"]),
+        "warnings": warnings,
         "used_blend": meta.get("used_blend"),
+        "used_usd_obstacle_map": usd_obstacle_bundle is not None,
         "waypoint_count": len(normalized["waypoints"]),
         "waypoint_issues": normalized["issues"],
         "yaw_convention": document.get("yaw_convention", YAW_CONVENTION),
@@ -1298,6 +1444,36 @@ def build_manual_trajectory_data(
         "yaw_min": min(yaw_values) if yaw_values else None,
         "yaw_mode": yaw_mode,
     }
+    if usd_obstacle_bundle is not None:
+        usd_meta = usd_obstacle_bundle["meta"]
+        stats.update(
+            {
+                "allow_planning_obstacle_collisions": bool(allow_planning_obstacle_collisions),
+                "collision_check_mode": collision_check_mode,
+                "debug_inflated_obstacle_grid": Path(usd_obstacle_bundle["debug_inflated_obstacle_grid_path"]).as_posix(),
+                "debug_inflation_radius_m": usd_meta.get("debug_inflation_radius_m"),
+                "obstacle_map_backend": "usd_obstacle_map_v1",
+                "obstacle_map_dir": Path(usd_obstacle_bundle["obstacle_map_dir"]).as_posix(),
+                "planning_inflation_radius_m": usd_meta.get("planning_inflation_radius_m"),
+                "planning_obstacle_grid": Path(usd_obstacle_bundle["planning_obstacle_grid_path"]).as_posix(),
+                "raw_obstacle_grid": Path(usd_obstacle_bundle["raw_obstacle_grid_path"]).as_posix(),
+            }
+        )
+        stats.update(obstacle_stats)
+    else:
+        stats.update(
+            {
+                "collision_check_mode": "legacy_traversable",
+                "obstacle_map_backend": "legacy_oracle_map",
+                "points_inside_debug_inflated_obstacle": None,
+                "points_inside_planning_obstacle": None,
+                "points_inside_raw_obstacle": None,
+                "segments_crossing_debug_inflated_obstacle": None,
+                "segments_crossing_planning_obstacle": None,
+                "segments_crossing_raw_obstacle": None,
+                "used_usd_obstacle_map": False,
+            }
+        )
     return {
         "dense_path": dense_path,
         "full_astar_path": full_path,
@@ -1413,6 +1589,10 @@ def write_manual_trajectory_outputs(
     preview_stride: int = 10,
     draw_heading_arrows: bool = True,
     draw_waypoint_labels: bool = True,
+    usd_obstacle_bundle: dict[str, Any] | None = None,
+    draw_planning_obstacles: bool = True,
+    draw_raw_obstacles: bool = False,
+    draw_debug_inflated_obstacles: bool = False,
 ) -> dict[str, Path]:
     out = ensure_dir(out_dir)
     action_rows = [
@@ -1463,10 +1643,57 @@ def write_manual_trajectory_outputs(
             preview_stride=preview_stride,
             draw_heading_arrows=draw_heading_arrows,
             draw_waypoint_labels=draw_waypoint_labels,
+            usd_obstacle_bundle=usd_obstacle_bundle,
         )
         preview_doc["preview_input_source"] = preview_resolution.get("source")
         preview_doc["preview_requested_backend"] = preview_resolution.get("preview_backend")
         paths["manual_trajectory_preview_photoreal"] = photoreal_path
+        if usd_obstacle_bundle is not None:
+            collision_frames = sorted(
+                {
+                    *[int(value) for value in stats.get("raw_obstacle_collision_frame_indices", [])],
+                    *[int(value) for value in stats.get("planning_obstacle_collision_frame_indices", [])],
+                }
+            )
+            if draw_planning_obstacles or draw_raw_obstacles or draw_debug_inflated_obstacles:
+                obstacle_preview_path = out / "manual_trajectory_preview_photoreal_with_obstacles.png"
+                obstacle_doc = render_manual_trajectory_preview_on_base_image(
+                    base_path,
+                    metadata_path,
+                    data["records"],
+                    data["sparse_waypoints"],
+                    obstacle_preview_path,
+                    preview_stride=preview_stride,
+                    draw_heading_arrows=draw_heading_arrows,
+                    draw_waypoint_labels=draw_waypoint_labels,
+                    usd_obstacle_bundle=usd_obstacle_bundle,
+                    draw_planning_obstacles=draw_planning_obstacles,
+                    draw_raw_obstacles=draw_raw_obstacles,
+                    draw_debug_inflated_obstacles=draw_debug_inflated_obstacles,
+                    collision_frame_indices=collision_frames,
+                )
+                paths["manual_trajectory_preview_photoreal_with_obstacles"] = obstacle_preview_path
+                preview_doc["manual_trajectory_preview_photoreal_with_obstacles"] = obstacle_preview_path.as_posix()
+                preview_doc["with_obstacles_preview"] = obstacle_doc
+            obstacle_qa_path = out / "manual_trajectory_preview_obstacle_qa.png"
+            obstacle_qa_doc = render_manual_trajectory_preview_on_base_image(
+                base_path,
+                metadata_path,
+                data["records"],
+                data["sparse_waypoints"],
+                obstacle_qa_path,
+                preview_stride=preview_stride,
+                draw_heading_arrows=draw_heading_arrows,
+                draw_waypoint_labels=draw_waypoint_labels,
+                usd_obstacle_bundle=usd_obstacle_bundle,
+                draw_planning_obstacles=True,
+                draw_raw_obstacles=True,
+                draw_debug_inflated_obstacles=True,
+                collision_frame_indices=collision_frames,
+            )
+            paths["manual_trajectory_preview_obstacle_qa"] = obstacle_qa_path
+            preview_doc["manual_trajectory_preview_obstacle_qa"] = obstacle_qa_path.as_posix()
+            preview_doc["obstacle_qa_preview"] = obstacle_qa_doc
         shutil.copyfile(photoreal_path, default_preview_path)
         paths["manual_trajectory_preview"] = default_preview_path
     except Exception as exc:
@@ -1497,6 +1724,12 @@ def write_manual_trajectory_outputs(
     stats["manual_trajectory_preview_map"] = paths["manual_trajectory_preview_map"].as_posix()
     if "manual_trajectory_preview_photoreal" in paths:
         stats["manual_trajectory_preview_photoreal"] = paths["manual_trajectory_preview_photoreal"].as_posix()
+    if "manual_trajectory_preview_photoreal_with_obstacles" in paths:
+        stats["manual_trajectory_preview_photoreal_with_obstacles"] = paths[
+            "manual_trajectory_preview_photoreal_with_obstacles"
+        ].as_posix()
+    if "manual_trajectory_preview_obstacle_qa" in paths:
+        stats["manual_trajectory_preview_obstacle_qa"] = paths["manual_trajectory_preview_obstacle_qa"].as_posix()
     stats["manual_trajectory_preview_metadata"] = paths["manual_trajectory_preview_metadata"].as_posix()
     stats["preview_backend"] = preview_doc.get("preview_backend")
     stats["preview_base_image"] = preview_doc.get("base_image")
@@ -1525,28 +1758,103 @@ def build_and_write_manual_trajectory(
     preview_stride: int = 10,
     draw_heading_arrows: bool = True,
     draw_waypoint_labels: bool = True,
+    usd_obstacle_map_dir: str | Path | None = None,
+    planning_obstacle_grid: str | Path | None = None,
+    raw_obstacle_grid: str | Path | None = None,
+    clearance_distance_map: str | Path | None = None,
+    prefer_usd_obstacle_map: bool = False,
+    require_usd_obstacle_map: bool = False,
+    collision_check_mode: str = "planning_obstacle",
+    allow_planning_obstacle_collisions: bool = False,
+    draw_planning_obstacles: bool = True,
+    draw_raw_obstacles: bool = False,
+    draw_debug_inflated_obstacles: bool = False,
 ) -> dict[str, Any]:
     bundle = load_map_bundle(map_dir)
     waypoints = read_json(manual_waypoints)
-    data = build_manual_trajectory_data(
-        waypoints,
-        bundle["meta"],
-        bundle["reachable"],
-        bundle["traversable"],
-        snap_to_traversable=snap_to_traversable,
-        connect_with_astar=connect_with_astar,
-        step_size=step_size,
-        yaw_mode=yaw_mode,
-        yaw_interpolation=yaw_interpolation,
-        insert_rotation_frames=insert_rotation_frames,
-        rotation_step_deg=rotation_step_deg,
-    )
+    usd_bundle: dict[str, Any] | None = None
+    fallback_warnings: list[str] = []
+    use_usd_requested = bool(usd_obstacle_map_dir) and (bool(prefer_usd_obstacle_map) or bool(require_usd_obstacle_map))
+    if use_usd_requested:
+        try:
+            usd_bundle = load_usd_obstacle_planning_map(
+                usd_obstacle_map_dir,
+                planning_obstacle_grid=planning_obstacle_grid,
+                raw_obstacle_grid=raw_obstacle_grid,
+                clearance_distance_map=clearance_distance_map,
+            )
+        except Exception as exc:
+            if require_usd_obstacle_map:
+                raise
+            fallback_warnings.append(
+                "USD obstacle map was requested but could not be loaded; fell back to legacy oracle map: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    if usd_bundle is not None:
+        obstacle_grid, _mode_warnings = select_collision_obstacle_grid(usd_bundle, collision_check_mode)
+        usd_meta = usd_obstacle_grid_meta(usd_bundle)
+        planning_free = ~np.asarray(obstacle_grid, dtype=bool)
+        document = manual_waypoint_document_to_sequence(waypoints)
+        start_wp = document["full_waypoints"][0]
+        start_cell = world_to_grid(float(start_wp["x"]), float(start_wp["y"]), usd_meta)
+        if not in_bounds(planning_free.shape, start_cell) or not bool(planning_free[start_cell]):
+            start_cell = nearest_reachable_cell(start_cell, planning_free)
+        planning_valid = reachable_mask(planning_free, start_cell, diagonal=True)
+        if not planning_valid.any():
+            planning_valid = planning_free
+        data = build_manual_trajectory_data(
+            waypoints,
+            usd_meta,
+            planning_valid,
+            planning_valid,
+            snap_to_traversable=snap_to_traversable,
+            connect_with_astar=connect_with_astar,
+            step_size=step_size,
+            yaw_mode=yaw_mode,
+            yaw_interpolation=yaw_interpolation,
+            insert_rotation_frames=insert_rotation_frames,
+            rotation_step_deg=rotation_step_deg,
+            usd_obstacle_bundle=usd_bundle,
+            collision_check_mode=collision_check_mode,
+            allow_planning_obstacle_collisions=allow_planning_obstacle_collisions,
+        )
+        compatibility = compare_map_grid_to_usd_obstacle_map(bundle["meta"], usd_bundle["meta"])
+        data["stats"]["legacy_map_grid_compatibility"] = compatibility
+        data["stats"]["legacy_map_dir"] = Path(map_dir).as_posix()
+        data["stats"]["usd_planning_free_cell_count"] = int(np.count_nonzero(planning_free))
+        data["stats"]["usd_planning_reachable_cell_count"] = int(np.count_nonzero(planning_valid))
+        data["stats"]["usd_planning_reachable_start_grid_ij"] = [int(start_cell[0]), int(start_cell[1])]
+        if not compatibility["compatible"]:
+            data["stats"].setdefault("warnings", []).append(
+                "USD obstacle map grid differs from --map-dir; snap/A*/collision used the USD obstacle map transform."
+            )
+        occupancy_for_preview = np.asarray(usd_bundle["raw_obstacle_grid"], dtype=bool)
+        reachable_for_preview = planning_valid
+    else:
+        data = build_manual_trajectory_data(
+            waypoints,
+            bundle["meta"],
+            bundle["reachable"],
+            bundle["traversable"],
+            snap_to_traversable=snap_to_traversable,
+            connect_with_astar=connect_with_astar,
+            step_size=step_size,
+            yaw_mode=yaw_mode,
+            yaw_interpolation=yaw_interpolation,
+            insert_rotation_frames=insert_rotation_frames,
+            rotation_step_deg=rotation_step_deg,
+        )
+        if fallback_warnings:
+            data["stats"].setdefault("warnings", []).extend(fallback_warnings)
+        occupancy_for_preview = bundle["occupancy"]
+        reachable_for_preview = bundle["reachable"]
     paths = write_manual_trajectory_outputs(
         out_dir,
         data,
         map_dir=map_dir,
-        occupancy_grid=bundle["occupancy"],
-        reachable_grid=bundle["reachable"],
+        occupancy_grid=occupancy_for_preview,
+        reachable_grid=reachable_for_preview,
         manual_waypoints_path=manual_waypoints,
         preview_base_image=preview_base_image,
         preview_metadata=preview_metadata,
@@ -1554,6 +1862,10 @@ def build_and_write_manual_trajectory(
         preview_stride=preview_stride,
         draw_heading_arrows=draw_heading_arrows,
         draw_waypoint_labels=draw_waypoint_labels,
+        usd_obstacle_bundle=usd_bundle,
+        draw_planning_obstacles=draw_planning_obstacles,
+        draw_raw_obstacles=draw_raw_obstacles,
+        draw_debug_inflated_obstacles=draw_debug_inflated_obstacles,
     )
     stats = read_json(paths["manual_trajectory_stats"]) if paths.get("manual_trajectory_stats") else data["stats"]
     return {"paths": {k: v.as_posix() for k, v in paths.items()}, "stats": stats}
@@ -1564,6 +1876,7 @@ def qa_manual_route(
     manual_route_dir: str | Path,
     manual_trajectory_dir: str | Path,
     map_dir: str | Path,
+    usd_obstacle_map_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     route_dir = Path(manual_route_dir)
     trajectory_dir = Path(manual_trajectory_dir)
@@ -1573,10 +1886,12 @@ def qa_manual_route(
     traversable = bundle["traversable"]
     occupancy = bundle["occupancy"]
     failures: list[str] = []
+    warnings: list[str] = []
 
     waypoints_path = route_dir / "manual_waypoints_world.json"
     trajectory_path = trajectory_dir / "manual_dense_trajectory.jsonl"
     preview_path = trajectory_dir / "manual_trajectory_preview.png"
+    preview_with_obstacles_path = trajectory_dir / "manual_trajectory_preview_photoreal_with_obstacles.png"
     stats_path = trajectory_dir / "manual_trajectory_stats.json"
     route_metadata_path = route_dir / "manual_route_metadata.json"
     stats: dict[str, Any] = {}
@@ -1584,6 +1899,14 @@ def qa_manual_route(
     waypoints_doc: dict[str, Any] = {}
     full_waypoints: list[dict[str, Any]] = []
     trajectory_rows: list[dict[str, Any]] = []
+    if stats_path.exists():
+        try:
+            loaded_stats = read_json(stats_path)
+            if isinstance(loaded_stats, dict):
+                stats = loaded_stats
+        except Exception:
+            stats = {}
+    qa_uses_usd_obstacle_map = bool(usd_obstacle_map_dir and stats.get("used_usd_obstacle_map") is True)
 
     if not waypoints_path.exists():
         failures.append(f"manual_waypoints_world.json does not exist: {waypoints_path}")
@@ -1627,12 +1950,13 @@ def qa_manual_route(
                 failures.append("start pose is in an occupied cell")
             if len(full_waypoints) < 2:
                 failures.append(f"manual waypoint count is less than 2 including start: {len(full_waypoints)}")
-        for idx, wp in enumerate(full_waypoints):
-            cell = world_to_grid(float(wp["x"]), float(wp["y"]), meta)
-            if not in_bounds(reachable.shape, cell):
-                failures.append(f"manual waypoint {idx} is out of bounds: {cell}")
-            elif not reachable[cell] or not traversable[cell]:
-                failures.append(f"manual waypoint {idx} is not reachable/traversable: {cell}")
+        if not qa_uses_usd_obstacle_map:
+            for idx, wp in enumerate(full_waypoints):
+                cell = world_to_grid(float(wp["x"]), float(wp["y"]), meta)
+                if not in_bounds(reachable.shape, cell):
+                    failures.append(f"manual waypoint {idx} is out of bounds: {cell}")
+                elif not reachable[cell] or not traversable[cell]:
+                    failures.append(f"manual waypoint {idx} is not reachable/traversable: {cell}")
 
     if not trajectory_path.exists():
         failures.append(f"manual_dense_trajectory.jsonl does not exist: {trajectory_path}")
@@ -1665,7 +1989,7 @@ def qa_manual_route(
                 break
             x, y, yaw = [float(v) for v in pose]
             cell = world_to_grid(x, y, meta)
-            if not in_bounds(reachable.shape, cell) or not reachable[cell]:
+            if not qa_uses_usd_obstacle_map and (not in_bounds(reachable.shape, cell) or not reachable[cell]):
                 failures.append(f"trajectory row {idx} is not reachable: {cell}")
                 break
         if trajectory_rows and waypoints_doc.get("start_pose_world"):
@@ -1674,7 +1998,7 @@ def qa_manual_route(
             yaw_error = abs(shortest_yaw_delta(first_yaw, start_yaw))
             if yaw_error > 1e-5:
                 failures.append(f"first dense trajectory yaw is not close to start yaw: delta={yaw_error}")
-        if trajectory_rows and full_waypoints:
+        if trajectory_rows and full_waypoints and not qa_uses_usd_obstacle_map:
             for wp in full_waypoints:
                 if "yaw" not in wp or not _finite_yaw(wp.get("yaw")):
                     continue
@@ -1721,6 +2045,46 @@ def qa_manual_route(
             failures.append("stats path_collision_check_passed is not true")
         if stats.get("traversable_check_passed") is not True:
             failures.append("stats traversable_check_passed is not true")
+        if usd_obstacle_map_dir:
+            if stats.get("used_usd_obstacle_map") is not True:
+                warnings.append("manual trajectory was built without USD obstacle planning map.")
+            else:
+                if stats.get("collision_check_mode") != "planning_obstacle":
+                    failures.append(
+                        f"stats collision_check_mode is not planning_obstacle: {stats.get('collision_check_mode')!r}"
+                    )
+                for key in (
+                    "points_inside_raw_obstacle",
+                    "points_inside_planning_obstacle",
+                    "segments_crossing_planning_obstacle",
+                ):
+                    if int(stats.get(key) or 0) != 0:
+                        failures.append(f"stats {key} is not zero: {stats.get(key)!r}")
+                if int(stats.get("points_inside_debug_inflated_obstacle") or 0) > 0:
+                    warnings.append("route enters conservative debug inflation but not planning obstacle.")
+                if not preview_with_obstacles_path.exists() or preview_with_obstacles_path.stat().st_size <= 0:
+                    failures.append(f"manual trajectory obstacle preview missing or empty: {preview_with_obstacles_path}")
+
+    if usd_obstacle_map_dir and trajectory_rows:
+        try:
+            usd_bundle = load_usd_obstacle_planning_map(usd_obstacle_map_dir)
+            live_obstacle_stats = compute_trajectory_obstacle_stats(trajectory_rows, usd_bundle)
+        except Exception as exc:
+            failures.append(f"failed to validate USD obstacle map collisions: {type(exc).__name__}: {exc}")
+            live_obstacle_stats = {}
+        else:
+            for key in (
+                "points_inside_raw_obstacle",
+                "points_inside_planning_obstacle",
+                "segments_crossing_raw_obstacle",
+                "segments_crossing_planning_obstacle",
+            ):
+                if int(live_obstacle_stats.get(key) or 0) != 0:
+                    failures.append(f"live USD obstacle check {key} is not zero: {live_obstacle_stats.get(key)!r}")
+            if int(live_obstacle_stats.get("points_inside_debug_inflated_obstacle") or 0) > 0:
+                warnings.append("live USD obstacle check enters conservative debug inflation only.")
+    else:
+        live_obstacle_stats = {}
 
     if route_metadata_path.exists():
         route_metadata = read_json(route_metadata_path)
@@ -1736,6 +2100,18 @@ def qa_manual_route(
     summary = {
         "dense_frame_count": len(trajectory_rows),
         "failures": failures,
+        **{
+            key: live_obstacle_stats.get(key, stats.get(key))
+            for key in (
+                "points_inside_raw_obstacle",
+                "points_inside_planning_obstacle",
+                "points_inside_debug_inflated_obstacle",
+                "segments_crossing_raw_obstacle",
+                "segments_crossing_planning_obstacle",
+                "segments_crossing_debug_inflated_obstacle",
+            )
+        },
+        "collision_check_mode": stats.get("collision_check_mode"),
         "manual_route_dir": route_dir.as_posix(),
         "manual_trajectory_dir": trajectory_dir.as_posix(),
         "passed": not failures,
@@ -1747,6 +2123,8 @@ def qa_manual_route(
         "start_pose_world": stats.get("start_pose_world") or waypoints_doc.get("start_pose_world"),
         "random_seed": stats.get("random_seed") if "random_seed" in stats else waypoints_doc.get("random_seed"),
         "used_blend": stats.get("used_blend") if "used_blend" in stats else route_metadata.get("used_blend"),
+        "used_usd_obstacle_map": stats.get("used_usd_obstacle_map"),
+        "warnings": warnings,
         "yaw_discontinuity_count": stats.get("yaw_discontinuity_count"),
         "yaw_mode": stats.get("yaw_mode"),
         "waypoint_count": len(full_waypoints),

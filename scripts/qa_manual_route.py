@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manual-route-dir", default=None)
     parser.add_argument("--manual-trajectory-dir", default=None)
     parser.add_argument("--map-dir", default=None)
+    parser.add_argument("--usd-obstacle-map-dir", default=None)
     parser.add_argument("--route", default=None, help="Topdown manual_route.json to validate.")
     parser.add_argument("--dense", default=None, help="Optional manual_dense_trajectory.jsonl to validate.")
     return parser.parse_args()
@@ -143,6 +144,7 @@ def main() -> None:
             manual_route_dir=args.manual_route_dir,
             manual_trajectory_dir=args.manual_trajectory_dir,
             map_dir=args.map_dir,
+            usd_obstacle_map_dir=args.usd_obstacle_map_dir,
         )
         print(f"manual waypoint count: {summary['waypoint_count']}")
         print(f"dense frame count: {summary['dense_frame_count']}")
@@ -155,7 +157,13 @@ def main() -> None:
         print(f"yaw_discontinuity_count: {summary['yaw_discontinuity_count']}")
         print(f"start_pose_world: {summary['start_pose_world']}")
         print(f"random_seed: {summary['random_seed']}")
+        print(f"used_usd_obstacle_map: {summary.get('used_usd_obstacle_map')}")
+        print(f"collision_check_mode: {summary.get('collision_check_mode')}")
     print(f"pass/fail: {'pass' if summary['passed'] else 'fail'}")
+    if summary.get("warnings"):
+        print("warnings:")
+        for warning in summary["warnings"]:
+            print(f"- {warning}")
     if summary["failures"]:
         print("failures:")
         for failure in summary["failures"]:
