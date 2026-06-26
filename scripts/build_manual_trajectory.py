@@ -52,6 +52,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--allow-planning-obstacle-collisions", action="store_true")
     parser.add_argument("--require-route-metadata-aligned", action="store_true")
+    parser.add_argument("--manual-follow-mode", choices=("polyline_first", "astar_unconstrained_old"), default="polyline_first")
+    parser.add_argument("--max-deviation-from-manual-m", type=float, default=0.75)
+    parser.add_argument("--max-snap-distance-m", type=float, default=0.30)
+    parser.add_argument("--astar-corridor-width-m", type=float, default=1.0)
+    parser.add_argument("--direct-segment-first", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--fail-if-deviation-exceeds", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--preserve-manual-waypoints", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--allow-unconstrained-astar-fallback", action="store_true")
     parser.add_argument("--draw-planning-obstacles", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--draw-raw-obstacles", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--draw-debug-inflated-obstacles", action=argparse.BooleanOptionalAction, default=False)
@@ -233,6 +241,14 @@ def main() -> None:
             collision_check_mode=args.collision_check_mode,
             allow_planning_obstacle_collisions=bool(args.allow_planning_obstacle_collisions),
             require_route_metadata_aligned=bool(args.require_route_metadata_aligned),
+            manual_follow_mode=args.manual_follow_mode,
+            max_deviation_from_manual_m=float(args.max_deviation_from_manual_m),
+            max_snap_distance_m=float(args.max_snap_distance_m),
+            astar_corridor_width_m=float(args.astar_corridor_width_m),
+            direct_segment_first=bool(args.direct_segment_first),
+            fail_if_deviation_exceeds=bool(args.fail_if_deviation_exceeds),
+            preserve_manual_waypoints=bool(args.preserve_manual_waypoints),
+            allow_unconstrained_astar_fallback=bool(args.allow_unconstrained_astar_fallback),
             draw_planning_obstacles=bool(args.draw_planning_obstacles),
             draw_raw_obstacles=bool(args.draw_raw_obstacles),
             draw_debug_inflated_obstacles=bool(args.draw_debug_inflated_obstacles),

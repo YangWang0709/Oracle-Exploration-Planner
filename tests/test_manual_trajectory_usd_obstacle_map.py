@@ -140,6 +140,8 @@ def _build(
     start: tuple[float, float, float] = (0.5, 0.5, 0.0),
     goal: tuple[float, float, float] = (5.5, 0.5, 0.0),
     connect_with_astar: bool = True,
+    max_deviation_from_manual_m: float = 1.25,
+    max_snap_distance_m: float = 0.30,
 ) -> tuple[dict, Path, Path, Path]:
     map_dir = _write_legacy_map(tmp_path)
     usd_dir = _write_usd_obstacle_map(tmp_path, raw=raw, planning=planning, debug=debug)
@@ -160,6 +162,8 @@ def _build(
         usd_obstacle_map_dir=usd_dir,
         prefer_usd_obstacle_map=True,
         collision_check_mode="planning_obstacle",
+        max_deviation_from_manual_m=max_deviation_from_manual_m,
+        max_snap_distance_m=max_snap_distance_m,
     )
     return result, route_dir, map_dir, usd_dir
 
@@ -202,6 +206,7 @@ def test_waypoint_inside_planning_obstacle_snaps_out(tmp_path: Path) -> None:
         planning=planning,
         start=(1.5, 1.5, 0.0),
         goal=(4.5, 1.5, 0.0),
+        max_snap_distance_m=1.1,
     )
     stats = result["stats"]
 
@@ -214,7 +219,7 @@ def test_line_path_crossing_planning_obstacle_fails_without_astar(tmp_path: Path
     planning = np.zeros((6, 6), dtype=bool)
     planning[0, 2] = True
 
-    with pytest.raises(ValueError, match="planning obstacle"):
+    with pytest.raises(ValueError, match="requires A\\*"):
         _build(tmp_path, planning=planning, connect_with_astar=False)
 
 

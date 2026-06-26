@@ -100,6 +100,7 @@ def test_manual_waypoint_snapping_and_astar_connection() -> None:
         snap_to_traversable=True,
         connect_with_astar=True,
         step_size=1.0,
+        manual_follow_mode="astar_unconstrained_old",
     )
 
     assert data["stats"]["snapped_waypoint_count"] == 1

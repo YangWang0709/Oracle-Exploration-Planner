@@ -376,6 +376,23 @@ def qa_manual_trajectory_against_usd_obstacles(
             failures.append("manual trajectory stats used_usd_obstacle_map is not true")
         if stats.get("collision_check_mode") != "planning_obstacle":
             failures.append(f"manual trajectory collision_check_mode is not planning_obstacle: {stats.get('collision_check_mode')!r}")
+        if "manual_follow_mode" in stats and stats.get("manual_follow_mode") != "polyline_first":
+            failures.append(f"manual trajectory manual_follow_mode is not polyline_first: {stats.get('manual_follow_mode')!r}")
+        if "manual_waypoint_nearest_dense_max_error_m" in stats:
+            limit = max(float(stats.get("step_size") or 0.0), 0.1)
+            if float(stats.get("manual_waypoint_nearest_dense_max_error_m") or 0.0) > limit:
+                failures.append(
+                    "manual trajectory manual_waypoint_nearest_dense_max_error_m exceeds waypoint preservation limit"
+                )
+        if "max_path_deviation_from_manual_polyline_m" in stats:
+            if float(stats.get("max_path_deviation_from_manual_polyline_m") or 0.0) > float(
+                stats.get("max_deviation_from_manual_m") or 0.0
+            ):
+                failures.append("manual trajectory max_path_deviation_from_manual_polyline_m exceeds limit")
+        if int((stats.get("connection_methods") or {}).get("unconstrained_astar") or 0) != 0:
+            failures.append("manual trajectory used unconstrained_astar")
+        if stats.get("segments_exceeding_deviation_limit"):
+            failures.append("manual trajectory has segments exceeding deviation limit")
 
     obstacle_stats: dict[str, Any] = {}
     if rows and bundle is not None:

@@ -310,6 +310,13 @@ python scripts/build_manual_trajectory.py \
   --prefer-usd-obstacle-map \
   --collision-check-mode planning_obstacle \
   --require-route-metadata-aligned \
+  --manual-follow-mode polyline_first \
+  --direct-segment-first \
+  --preserve-manual-waypoints \
+  --max-deviation-from-manual-m 0.75 \
+  --max-snap-distance-m 0.30 \
+  --astar-corridor-width-m 1.00 \
+  --fail-if-deviation-exceeds \
   --preview-base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
   --preview-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --preview-mode photoreal \
@@ -318,7 +325,7 @@ python scripts/build_manual_trajectory.py \
   --draw-planning-obstacles
 ```
 
-After the USD obstacle overlay has been visually confirmed against the photoreal topdown image, manual trajectory building should use `usd_obstacle_map_v1/planning_obstacle_grid.npy` for snap, A*, and collision checks. `debug_inflated_obstacle_grid.npy` is a conservative safety reference and is not the default route blocker.
+After the USD obstacle overlay has been visually confirmed against the photoreal topdown image, manual trajectory building should use `usd_obstacle_map_v1/planning_obstacle_grid.npy` for snap, local corridor A*, and collision checks. The default `polyline_first` mode treats manual waypoints as hard constraints: if the direct segment between adjacent waypoints is collision-free, the dense trajectory follows that line directly. A* is used only when the direct line crosses a planning obstacle, and then only inside `--astar-corridor-width-m`; if the route would deviate more than `--max-deviation-from-manual-m`, build fails and the user should add intermediate waypoints. `debug_inflated_obstacle_grid.npy` is a conservative safety reference and is not the default route blocker.
 
 If the final photoreal preview still looks misaligned, run the projection audit before changing transforms or re-annotating:
 
@@ -345,6 +352,7 @@ Manual trajectory outputs:
 - `manual_trajectory_stats.json`
 - `manual_trajectory_preview_photoreal.png`: final A*/snap/dense trajectory preview over the photoreal topdown annotation base.
 - `manual_trajectory_preview_photoreal_with_obstacles.png`: final dense trajectory over photoreal topdown with the USD planning obstacle overlay.
+- `manual_trajectory_deviation_audit.png`: manual polyline, snapped waypoints, dense trajectory, and per-segment follow mode/deviation labels.
 - `manual_trajectory_preview_obstacle_qa.png`: raw/planning/debug obstacle QA overlay.
 - `manual_trajectory_preview_map.png`: debug map preview only.
 - `manual_trajectory_preview.png`: compatibility copy of the photoreal preview when the photoreal base is available.
@@ -359,7 +367,7 @@ xdg-open "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajecto
 
 Use the obstacle preview to confirm the final route stays outside `planning_obstacle_grid.npy`. If a route enters a planning obstacle, re-annotate or adjust the route. Entering only `debug_inflated_obstacle_grid.npy` is a warning, not necessarily an error.
 
-`manual_dense_trajectory.jsonl` stores `base_pose_world=[x, y, yaw]` for every frame, plus `yaw_source`, `nearest_manual_waypoint_idx`, `route_source=manual`, and `pose_annotation_mode=position_plus_yaw`. A* connects waypoint positions only; dense trajectory yaw comes from the user-annotated waypoint yaw with shortest-angle interpolation.
+`manual_dense_trajectory.jsonl` stores `base_pose_world=[x, y, yaw]` for every frame, plus `yaw_source`, `nearest_manual_waypoint_idx`, `route_source=manual`, and `pose_annotation_mode=position_plus_yaw`. In default `polyline_first` mode, the user-drawn waypoint polyline is primary; A* cannot globally reroute the path far away from the annotation. Dense trajectory yaw comes from the user-annotated waypoint yaw with shortest-angle interpolation.
 
 Run QA:
 

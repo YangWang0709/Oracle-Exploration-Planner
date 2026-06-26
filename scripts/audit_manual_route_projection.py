@@ -236,6 +236,41 @@ def _dense_manual_deviation_px(projected_dense: Sequence[dict[str, Any]], roundt
     }
 
 
+def _point_to_segment_distance(x: float, y: float, ax: float, ay: float, bx: float, by: float) -> float:
+    abx = bx - ax
+    aby = by - ay
+    denom = abx * abx + aby * aby
+    if denom <= 1e-12:
+        return math.hypot(x - ax, y - ay)
+    t = max(0.0, min(1.0, ((x - ax) * abx + (y - ay) * aby) / denom))
+    px = ax + t * abx
+    py = ay + t * aby
+    return math.hypot(x - px, y - py)
+
+
+def _max_dense_deviation_from_manual_polyline_m(dense_rows: Sequence[dict[str, Any]], world_doc: dict[str, Any]) -> float | None:
+    manual = [
+        (float(row["x"]), float(row["y"]))
+        for row in (world_doc.get("full_waypoints") or [])
+        if isinstance(row, dict) and "x" in row and "y" in row
+    ]
+    if len(manual) < 2:
+        return None
+    values: list[float] = []
+    for row in dense_rows:
+        pose = _finite_pose(row)
+        if pose is None:
+            continue
+        x, y, _yaw = pose
+        values.append(
+            min(
+                _point_to_segment_distance(x, y, ax, ay, bx, by)
+                for (ax, ay), (bx, by) in zip(manual[:-1], manual[1:])
+            )
+        )
+    return max(values) if values else None
+
+
 def _route_is_stale(route_meta: dict[str, Any], route_dir: Path, metadata_path: Path, metadata_sha: str) -> bool:
     axis = route_meta.get("metadata_axis_preset") or route_meta.get("axis_preset")
     source = route_meta.get("metadata_alignment_transform_source") or route_meta.get("alignment_transform_source")
@@ -261,7 +296,7 @@ def _diagnosis(report: dict[str, Any], dense_deviation: dict[str, Any]) -> str:
         return "image_to_world_conversion_mismatch"
     if float(report.get("dense_points_in_image_ratio") or 0.0) < 0.95:
         return "world_to_image_preview_mismatch"
-    if dense_deviation.get("waypoints_over_5px_error"):
+    if dense_deviation.get("waypoints_over_5px_error") or report.get("segments_exceeding_deviation_limit"):
         return "trajectory_deviates_from_manual_waypoints"
     if int(report.get("points_inside_planning_obstacle") or 0) > 0:
         return "trajectory_collides_with_planning_obstacle"
@@ -326,6 +361,8 @@ def run_audit(
     world_doc = read_json(required["manual_waypoints_world"])
     route_meta_path = route_dir / "manual_route_metadata.json"
     route_meta = read_json(route_meta_path) if route_meta_path.exists() else {}
+    trajectory_stats_path = trajectory_dir / "manual_trajectory_stats.json"
+    trajectory_stats = read_json(trajectory_stats_path) if trajectory_stats_path.exists() else {}
     dense_rows = read_jsonl(required["manual_dense_trajectory"])
     metadata_sha = file_sha256(metadata_path)
 
@@ -352,8 +389,21 @@ def run_audit(
     _save_dense_obstacle_overlay(base, metadata_doc, projected_dense, usd_bundle, out_dir / "dense_trajectory_with_obstacles_audit.png")
 
     dense_deviation = _dense_manual_deviation_px(projected_dense, roundtrip)
+    waypoint_errors_m = trajectory_stats.get("manual_waypoint_nearest_dense_errors") or []
+    waypoint_values_m = [
+        float(row["nearest_dense_error_m"])
+        for row in waypoint_errors_m
+        if isinstance(row, dict) and row.get("nearest_dense_error_m") is not None
+    ]
+    max_path_deviation_m = trajectory_stats.get("max_path_deviation_from_manual_polyline_m")
+    if max_path_deviation_m is None:
+        max_path_deviation_m = _max_dense_deviation_from_manual_polyline_m(dense_rows, world_doc)
     report: dict[str, Any] = {
         "axis_preset": metadata_doc.get("axis_preset"),
+        "connection_methods": trajectory_stats.get(
+            "connection_methods",
+            {"corridor_astar": 0, "direct_line": 0, "unconstrained_astar": 0},
+        ),
         "dense_manual_nearest_max_error_px": dense_deviation.get("max_error_px"),
         "dense_manual_nearest_mean_error_px": dense_deviation.get("mean_error_px"),
         "dense_manual_waypoints_over_5px_error": dense_deviation.get("waypoints_over_5px_error"),
@@ -361,6 +411,13 @@ def run_audit(
         "manual_route_dir": route_dir.as_posix(),
         "manual_trajectory_dir": trajectory_dir.as_posix(),
         "max_clicked_vs_reprojected_error_px": roundtrip.get("max_error_px"),
+        "max_path_deviation_from_manual_polyline_m": max_path_deviation_m,
+        "manual_follow_mode": trajectory_stats.get("manual_follow_mode"),
+        "max_deviation_from_manual_m": trajectory_stats.get("max_deviation_from_manual_m"),
+        "manual_waypoint_nearest_dense_max_error_m": trajectory_stats.get("manual_waypoint_nearest_dense_max_error_m")
+        if trajectory_stats.get("manual_waypoint_nearest_dense_max_error_m") is not None
+        else (max(waypoint_values_m) if waypoint_values_m else None),
+        "manual_waypoint_nearest_dense_max_error_px": dense_deviation.get("max_error_px"),
         "mean_clicked_vs_reprojected_error_px": roundtrip.get("mean_error_px"),
         "metadata_path": metadata_path.as_posix(),
         "missing_required_files": [],
@@ -375,6 +432,8 @@ def run_audit(
         "route_metadata_axis_preset": route_meta.get("metadata_axis_preset") or route_meta.get("axis_preset"),
         "route_metadata_path": route_meta_path.as_posix() if route_meta_path.exists() else None,
         "route_metadata_path_used": route_meta.get("metadata_path_used") or route_meta.get("metadata_path"),
+        "segments_exceeding_deviation_limit": trajectory_stats.get("segments_exceeding_deviation_limit", []),
+        "step_size": trajectory_stats.get("step_size"),
         "waypoints_over_5px_error": roundtrip.get("waypoints_over_threshold", []),
     }
     report["diagnosis"] = _diagnosis(report, dense_deviation)

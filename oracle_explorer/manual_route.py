@@ -578,6 +578,7 @@ def render_manual_trajectory_preview_on_base_image(
     draw_raw_obstacles: bool = False,
     draw_debug_inflated_obstacles: bool = False,
     collision_frame_indices: Sequence[int] | None = None,
+    segment_stats: Sequence[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Render manual dense trajectory and sparse poses on the annotation base image."""
 
@@ -657,6 +658,8 @@ def render_manual_trajectory_preview_on_base_image(
             {
                 "idx": int(waypoint.get("idx", idx)),
                 "kind": waypoint.get("kind", "manual"),
+                "original_u": world_to_image_uv(projected_metadata, float(waypoint.get("original_x", x)), float(waypoint.get("original_y", y)))[0],
+                "original_v": world_to_image_uv(projected_metadata, float(waypoint.get("original_x", x)), float(waypoint.get("original_y", y)))[1],
                 "u": u,
                 "v": v,
                 "yaw": yaw,
@@ -725,6 +728,15 @@ def render_manual_trajectory_preview_on_base_image(
         else:
             fill = (255, 220, 30)
         draw.ellipse((u - waypoint_radius, v - waypoint_radius, u + waypoint_radius, v + waypoint_radius), fill=fill, outline=(0, 0, 0), width=2)
+        original_u = float(point.get("original_u", u))
+        original_v = float(point.get("original_v", v))
+        if math.hypot(original_u - u, original_v - v) > 1.0:
+            draw.rectangle(
+                (original_u - waypoint_radius, original_v - waypoint_radius, original_u + waypoint_radius, original_v + waypoint_radius),
+                outline=(225, 35, 180),
+                width=2,
+            )
+            draw.line((original_u, original_v, u, v), fill=(225, 35, 180), width=2)
         if draw_waypoint_labels:
             draw.text((u + waypoint_radius + 3, v - waypoint_radius - 4), str(point["idx"]), fill=(0, 0, 0))
         if draw_heading_arrows:
@@ -739,6 +751,19 @@ def render_manual_trajectory_preview_on_base_image(
                 width=max(2, path_width),
             )
             waypoint_heading_arrow_count += 1
+
+    for stat in segment_stats or []:
+        segment_idx = int(stat.get("segment_idx", -1))
+        if segment_idx < 0 or segment_idx + 1 >= len(sparse_projected):
+            continue
+        a = sparse_projected[segment_idx]
+        b = sparse_projected[segment_idx + 1]
+        if not a.get("in_bounds") or not b.get("in_bounds"):
+            continue
+        mid_u = (float(a["u"]) + float(b["u"])) * 0.5
+        mid_v = (float(a["v"]) + float(b["v"])) * 0.5
+        fill = (230, 35, 45) if stat.get("exceeds_deviation_limit") else (0, 0, 0)
+        draw.text((mid_u + 4, mid_v + 4), str(stat.get("connection_method", "")), fill=fill)
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -772,6 +797,63 @@ def render_manual_trajectory_preview_on_base_image(
         "waypoint_heading_arrow_count": waypoint_heading_arrow_count,
         "world_to_image_transform": projected_metadata.get("world_to_image_transform") or projected_metadata.get("world_to_image"),
     }
+
+
+def render_manual_trajectory_deviation_audit(
+    base_image_path: str | Path,
+    metadata_path: str | Path,
+    dense_trajectory_records: Sequence[dict[str, Any]],
+    sparse_waypoints: Sequence[dict[str, Any]],
+    out_path: str | Path,
+    *,
+    segment_stats: Sequence[dict[str, Any]] | None = None,
+) -> Path:
+    base_path = Path(base_image_path)
+    metadata = read_json(metadata_path)
+    image = Image.open(base_path).convert("RGB")
+    draw = ImageDraw.Draw(image)
+
+    manual_pts: list[tuple[float, float]] = []
+    snapped_pts: list[tuple[float, float]] = []
+    for waypoint in sparse_waypoints:
+        original_x = float(waypoint.get("original_x", waypoint["x"]))
+        original_y = float(waypoint.get("original_y", waypoint["y"]))
+        manual_pts.append(world_to_image_uv(metadata, original_x, original_y))
+        snapped_pts.append(world_to_image_uv(metadata, float(waypoint["x"]), float(waypoint["y"])))
+
+    dense_pts: list[tuple[float, float]] = []
+    for row in dense_trajectory_records:
+        pose = _record_pose_world(row)
+        if pose is None:
+            continue
+        dense_pts.append(world_to_image_uv(metadata, float(pose[0]), float(pose[1])))
+
+    if len(manual_pts) > 1:
+        draw.line(manual_pts, fill=(255, 180, 20), width=5, joint="curve")
+    if len(dense_pts) > 1:
+        draw.line(dense_pts, fill=(20, 115, 255), width=3, joint="curve")
+    for idx, (u, v) in enumerate(manual_pts):
+        draw.ellipse((u - 8, v - 8, u + 8, v + 8), fill=(255, 220, 35), outline=(0, 0, 0), width=2)
+        draw.text((u + 9, v - 9), str(idx), fill=(0, 0, 0))
+    for idx, (u, v) in enumerate(snapped_pts):
+        draw.rectangle((u - 5, v - 5, u + 5, v + 5), fill=(30, 220, 95), outline=(0, 0, 0), width=1)
+        if idx < len(manual_pts) and math.hypot(u - manual_pts[idx][0], v - manual_pts[idx][1]) > 1.0:
+            draw.line((manual_pts[idx][0], manual_pts[idx][1], u, v), fill=(220, 40, 180), width=2)
+
+    for stat in segment_stats or []:
+        idx = int(stat.get("segment_idx", -1))
+        if idx < 0 or idx + 1 >= len(manual_pts):
+            continue
+        mid_u = (manual_pts[idx][0] + manual_pts[idx + 1][0]) * 0.5
+        mid_v = (manual_pts[idx][1] + manual_pts[idx + 1][1]) * 0.5
+        text = f"{stat.get('connection_method')} dev={float(stat.get('max_deviation_m') or 0.0):.2f}m"
+        fill = (230, 40, 45) if stat.get("exceeds_deviation_limit") else (0, 0, 0)
+        draw.text((mid_u + 4, mid_v + 4), text, fill=fill)
+
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    image.save(out)
+    return out
 
 
 def _manual_route_documents(
@@ -1532,6 +1614,428 @@ def _yaw_discontinuity_count(poses: Sequence[tuple[float, float, float]], *, thr
     return count
 
 
+class ManualTrajectoryBuildError(ValueError):
+    """Manual trajectory build failure with structured diagnostics."""
+
+    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.details = details or {}
+
+
+def _point_to_segment_distance(x: float, y: float, ax: float, ay: float, bx: float, by: float) -> float:
+    abx = float(bx) - float(ax)
+    aby = float(by) - float(ay)
+    denom = abx * abx + aby * aby
+    if denom <= 1e-12:
+        return math.hypot(float(x) - float(ax), float(y) - float(ay))
+    t = ((float(x) - float(ax)) * abx + (float(y) - float(ay)) * aby) / denom
+    t = max(0.0, min(1.0, t))
+    px = float(ax) + t * abx
+    py = float(ay) + t * aby
+    return math.hypot(float(x) - px, float(y) - py)
+
+
+def _sample_world_segment(
+    start_xy: Sequence[float],
+    end_xy: Sequence[float],
+    *,
+    step_size: float,
+    meta: dict[str, Any],
+) -> list[tuple[float, float, float]]:
+    sx, sy = float(start_xy[0]), float(start_xy[1])
+    ex, ey = float(end_xy[0]), float(end_xy[1])
+    distance = math.hypot(ex - sx, ey - sy)
+    resolution = float(meta.get("resolution", meta.get("grid_resolution", 1.0)))
+    sample_step = max(min(float(step_size), max(resolution * 0.5, 1e-6)), 1e-6)
+    steps = max(1, int(math.ceil(distance / sample_step)))
+    points: list[tuple[float, float, float]] = []
+    for idx in range(steps + 1):
+        t = idx / float(steps)
+        points.append((sx + (ex - sx) * t, sy + (ey - sy) * t, t))
+    return points
+
+
+def _point_collision_reason(
+    x: float,
+    y: float,
+    meta: dict[str, Any],
+    valid_grid: np.ndarray,
+    *,
+    raw_obstacle_grid: np.ndarray | None = None,
+    planning_obstacle_grid: np.ndarray | None = None,
+) -> str | None:
+    cell = world_to_grid(x, y, meta)
+    valid = np.asarray(valid_grid, dtype=bool)
+    if not in_bounds(valid.shape, cell):
+        return "outside_map_bounds"
+    if raw_obstacle_grid is not None and bool(np.asarray(raw_obstacle_grid, dtype=bool)[cell]):
+        return "inside_raw_obstacle"
+    if planning_obstacle_grid is not None and bool(np.asarray(planning_obstacle_grid, dtype=bool)[cell]):
+        return "inside_planning_obstacle"
+    if not bool(valid[cell]):
+        return "outside_planning_free"
+    return None
+
+
+def _line_collision_report(
+    points: Sequence[tuple[float, float, float]],
+    meta: dict[str, Any],
+    valid_grid: np.ndarray,
+    *,
+    raw_obstacle_grid: np.ndarray | None = None,
+    planning_obstacle_grid: np.ndarray | None = None,
+) -> dict[str, Any]:
+    for sample_idx, (x, y, t) in enumerate(points):
+        reason = _point_collision_reason(
+            x,
+            y,
+            meta,
+            valid_grid,
+            raw_obstacle_grid=raw_obstacle_grid,
+            planning_obstacle_grid=planning_obstacle_grid,
+        )
+        if reason is not None:
+            return {
+                "collision_free": False,
+                "first_collision": {
+                    "reason": reason,
+                    "sample_idx": int(sample_idx),
+                    "t": float(t),
+                    "world_xy": [float(x), float(y)],
+                    "grid_ij": list(world_to_grid(x, y, meta)),
+                },
+            }
+    return {"collision_free": True, "first_collision": None}
+
+
+def _path_length_world(points: Sequence[Sequence[float]]) -> float:
+    total = 0.0
+    for a, b in zip(points[:-1], points[1:]):
+        total += math.hypot(float(b[0]) - float(a[0]), float(b[1]) - float(a[1]))
+    return total
+
+
+def _max_deviation_from_segment(points: Sequence[Sequence[float]], start_xy: Sequence[float], end_xy: Sequence[float]) -> float:
+    if not points:
+        return 0.0
+    return max(
+        _point_to_segment_distance(float(p[0]), float(p[1]), float(start_xy[0]), float(start_xy[1]), float(end_xy[0]), float(end_xy[1]))
+        for p in points
+    )
+
+
+def _corridor_mask_for_segment(
+    valid_grid: np.ndarray,
+    meta: dict[str, Any],
+    start_xy: Sequence[float],
+    end_xy: Sequence[float],
+    *,
+    corridor_width_m: float,
+    start_cell: GridIndex,
+    goal_cell: GridIndex,
+) -> np.ndarray:
+    valid = np.asarray(valid_grid, dtype=bool)
+    rows, cols = np.indices(valid.shape, dtype=np.float64)
+    origin = meta.get("origin_world_xy", [0.0, 0.0])
+    resolution = float(meta.get("resolution", meta.get("grid_resolution", 1.0)))
+    xs = float(origin[0]) + (cols + 0.5) * resolution
+    ys = float(origin[1]) + (rows + 0.5) * resolution
+    ax, ay = float(start_xy[0]), float(start_xy[1])
+    bx, by = float(end_xy[0]), float(end_xy[1])
+    abx = bx - ax
+    aby = by - ay
+    denom = abx * abx + aby * aby
+    if denom <= 1e-12:
+        dist = np.hypot(xs - ax, ys - ay)
+    else:
+        t = np.clip(((xs - ax) * abx + (ys - ay) * aby) / denom, 0.0, 1.0)
+        px = ax + t * abx
+        py = ay + t * aby
+        dist = np.hypot(xs - px, ys - py)
+    corridor = valid & (dist <= float(corridor_width_m))
+    if in_bounds(corridor.shape, start_cell) and valid[start_cell]:
+        corridor[start_cell] = True
+    if in_bounds(corridor.shape, goal_cell) and valid[goal_cell]:
+        corridor[goal_cell] = True
+    return corridor
+
+
+def _poses_from_world_points(
+    points: Sequence[tuple[float, float, float]],
+    *,
+    start_yaw: float,
+    end_yaw: float,
+    yaw_interpolation: str,
+) -> list[tuple[float, float, float]]:
+    return [
+        (float(x), float(y), interpolate_yaw(start_yaw, end_yaw, float(t), mode=yaw_interpolation))
+        for x, y, t in points
+    ]
+
+
+def _append_segment_samples(
+    *,
+    dense_path: list[GridIndex],
+    poses: list[tuple[float, float, float]],
+    yaw_sources: list[str],
+    nearest_indices: list[int],
+    meta: dict[str, Any],
+    segment_poses: Sequence[tuple[float, float, float]],
+    segment_idx: int,
+) -> None:
+    for local_idx, pose in enumerate(segment_poses):
+        if poses and local_idx == 0:
+            continue
+        dense_path.append(world_to_grid(float(pose[0]), float(pose[1]), meta))
+        poses.append((float(pose[0]), float(pose[1]), normalize_yaw(float(pose[2]))))
+        keyframe = local_idx == 0 or local_idx == len(segment_poses) - 1
+        yaw_sources.append("manual_keyframe" if keyframe else "manual_interpolated")
+        nearest_indices.append(segment_idx if local_idx < len(segment_poses) / 2.0 else segment_idx + 1)
+
+
+def _manual_waypoint_nearest_errors(
+    waypoints: Sequence[dict[str, Any]],
+    poses: Sequence[tuple[float, float, float]],
+) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    if not poses:
+        return errors
+    for fallback_idx, waypoint in enumerate(waypoints):
+        wx = float(waypoint.get("original_x", waypoint["x"]))
+        wy = float(waypoint.get("original_y", waypoint["y"]))
+        error = min(math.hypot(float(pose[0]) - wx, float(pose[1]) - wy) for pose in poses)
+        errors.append(
+            {
+                "idx": int(waypoint.get("idx", fallback_idx)),
+                "nearest_dense_error_m": float(error),
+                "original_world_xy": [wx, wy],
+            }
+        )
+    return errors
+
+
+def _manual_waypoint_nearest_errors_px(
+    waypoints: Sequence[dict[str, Any]],
+    records: Sequence[dict[str, Any]],
+    metadata: dict[str, Any],
+) -> list[dict[str, Any]]:
+    dense_pts: list[tuple[float, float]] = []
+    for row in records:
+        pose = _record_pose_world(row)
+        if pose is None:
+            continue
+        dense_pts.append(world_to_image_uv(metadata, float(pose[0]), float(pose[1])))
+    if not dense_pts:
+        return []
+    errors: list[dict[str, Any]] = []
+    for fallback_idx, waypoint in enumerate(waypoints):
+        wx = float(waypoint.get("original_x", waypoint["x"]))
+        wy = float(waypoint.get("original_y", waypoint["y"]))
+        u, v = world_to_image_uv(metadata, wx, wy)
+        error = min(math.hypot(du - u, dv - v) for du, dv in dense_pts)
+        errors.append({"idx": int(waypoint.get("idx", fallback_idx)), "nearest_dense_error_px": float(error)})
+    return errors
+
+
+def _polyline_first_trajectory(
+    *,
+    normalized_waypoints: Sequence[dict[str, Any]],
+    valid_grid: np.ndarray,
+    meta: dict[str, Any],
+    step_size: float,
+    yaw_interpolation: str,
+    connect_with_astar: bool,
+    direct_segment_first: bool,
+    max_deviation_from_manual_m: float,
+    max_snap_distance_m: float,
+    astar_corridor_width_m: float,
+    fail_if_deviation_exceeds: bool,
+    preserve_manual_waypoints: bool,
+    allow_unconstrained_astar_fallback: bool,
+    raw_obstacle_grid: np.ndarray | None = None,
+    planning_obstacle_grid: np.ndarray | None = None,
+) -> dict[str, Any]:
+    dense_path: list[GridIndex] = []
+    poses: list[tuple[float, float, float]] = []
+    yaw_sources: list[str] = []
+    nearest_indices: list[int] = []
+    segment_stats: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    for waypoint in normalized_waypoints:
+        snap_distance = float(waypoint.get("snap_distance_m") or 0.0)
+        if snap_distance > float(max_snap_distance_m):
+            raise ManualTrajectoryBuildError(
+                "manual waypoint snap distance exceeds max-snap-distance-m",
+                details={
+                    "idx": int(waypoint.get("idx", -1)),
+                    "max_snap_distance_m": float(max_snap_distance_m),
+                    "original_xy": [float(waypoint.get("original_x", waypoint["x"])), float(waypoint.get("original_y", waypoint["y"]))],
+                    "reason": "snap_distance_exceeds_limit",
+                    "snap_distance_m": snap_distance,
+                    "snapped_xy": [float(waypoint["x"]), float(waypoint["y"])],
+                    "suggested_fix": "Move this waypoint into planning-free space or add a nearby intermediate waypoint.",
+                },
+            )
+
+    for segment_idx, (start, goal) in enumerate(zip(normalized_waypoints[:-1], normalized_waypoints[1:])):
+        manual_start_xy = [float(start.get("original_x", start["x"])), float(start.get("original_y", start["y"]))]
+        manual_goal_xy = [float(goal.get("original_x", goal["x"])), float(goal.get("original_y", goal["y"]))]
+        snapped_start_xy = [float(start["x"]), float(start["y"])]
+        snapped_goal_xy = [float(goal["x"]), float(goal["y"])]
+        sampled_line = _sample_world_segment(snapped_start_xy, snapped_goal_xy, step_size=step_size, meta=meta)
+        line_report = _line_collision_report(
+            sampled_line,
+            meta,
+            valid_grid,
+            raw_obstacle_grid=raw_obstacle_grid,
+            planning_obstacle_grid=planning_obstacle_grid,
+        )
+        segment_poses: list[tuple[float, float, float]]
+        connection_method = "direct_line"
+        astar_fallback_used = False
+        if bool(direct_segment_first) and line_report["collision_free"]:
+            segment_poses = _poses_from_world_points(
+                sampled_line,
+                start_yaw=float(start["yaw"]),
+                end_yaw=float(goal["yaw"]),
+                yaw_interpolation=yaw_interpolation,
+            )
+        else:
+            if not connect_with_astar:
+                raise ManualTrajectoryBuildError(
+                    f"segment {segment_idx} requires A* but --connect-with-astar is disabled",
+                    details={
+                        "first_collision": line_report.get("first_collision"),
+                        "reason": "direct_segment_collision",
+                        "segment_idx": int(segment_idx),
+                        "suggested_fix": "Enable corridor A* or add intermediate waypoints around the obstacle.",
+                    },
+                )
+            start_cell = world_to_grid(snapped_start_xy[0], snapped_start_xy[1], meta)
+            goal_cell = world_to_grid(snapped_goal_xy[0], snapped_goal_xy[1], meta)
+            corridor = _corridor_mask_for_segment(
+                valid_grid,
+                meta,
+                manual_start_xy,
+                manual_goal_xy,
+                corridor_width_m=astar_corridor_width_m,
+                start_cell=start_cell,
+                goal_cell=goal_cell,
+            )
+            path = astar_path(corridor, start_cell, goal_cell, diagonal=True)
+            connection_method = "corridor_astar"
+            if not path:
+                if not allow_unconstrained_astar_fallback:
+                    raise ManualTrajectoryBuildError(
+                        f"segment {segment_idx} cannot be connected within corridor; add intermediate waypoint or adjust route",
+                        details={
+                            "astar_corridor_width_m": float(astar_corridor_width_m),
+                            "first_collision": line_report.get("first_collision"),
+                            "reason": "corridor_astar_failed",
+                            "segment_idx": int(segment_idx),
+                            "suggested_fix": "Add an intermediate waypoint that follows the intended local path around the obstacle.",
+                        },
+                    )
+                path = astar_path(np.asarray(valid_grid, dtype=bool), start_cell, goal_cell, diagonal=True)
+                connection_method = "unconstrained_astar"
+                astar_fallback_used = True
+                warnings.append(
+                    f"segment {segment_idx} used unconstrained A* fallback; manual route may deviate from annotation."
+                )
+                if not path:
+                    raise ManualTrajectoryBuildError(
+                        f"segment {segment_idx} cannot be connected even with unconstrained A*",
+                        details={
+                            "reason": "unconstrained_astar_failed",
+                            "segment_idx": int(segment_idx),
+                            "suggested_fix": "Move waypoints into the same planning-free connected component.",
+                        },
+                    )
+            segment_cells = resample_grid_path(path, meta, step_size)
+            if not segment_cells:
+                segment_cells = path
+            fractions = _path_fractions(segment_cells, meta)
+            segment_poses = []
+            for local_idx, cell in enumerate(segment_cells):
+                if local_idx == 0:
+                    x, y = snapped_start_xy
+                elif local_idx == len(segment_cells) - 1:
+                    x, y = snapped_goal_xy
+                else:
+                    x, y = grid_to_world(cell[0], cell[1], meta)
+                fraction = fractions[local_idx] if local_idx < len(fractions) else 0.0
+                segment_poses.append(
+                    (
+                        float(x),
+                        float(y),
+                        interpolate_yaw(float(start["yaw"]), float(goal["yaw"]), fraction, mode=yaw_interpolation),
+                    )
+                )
+
+        segment_points = [(pose[0], pose[1]) for pose in segment_poses]
+        max_deviation = _max_deviation_from_segment(segment_points, manual_start_xy, manual_goal_xy)
+        segment_stat = {
+            "astar_fallback_used": bool(astar_fallback_used),
+            "connection_method": connection_method,
+            "end_waypoint_idx": int(goal.get("idx", segment_idx + 1)),
+            "exceeds_deviation_limit": bool(max_deviation > float(max_deviation_from_manual_m)),
+            "line_collision_free": bool(line_report["collision_free"]),
+            "max_deviation_m": float(max_deviation),
+            "path_length_m": float(_path_length_world(segment_points)),
+            "segment_idx": int(segment_idx),
+            "snap_end_distance_m": float(goal.get("snap_distance_m") or 0.0),
+            "snap_start_distance_m": float(start.get("snap_distance_m") or 0.0),
+            "start_waypoint_idx": int(start.get("idx", segment_idx)),
+        }
+        if line_report.get("first_collision"):
+            segment_stat["first_line_collision"] = line_report["first_collision"]
+        segment_stats.append(segment_stat)
+        if max_deviation > float(max_deviation_from_manual_m) and fail_if_deviation_exceeds:
+            raise ManualTrajectoryBuildError(
+                f"segment {segment_idx} exceeds max deviation from manual route",
+                details={
+                    **segment_stat,
+                    "max_deviation_from_manual_m": float(max_deviation_from_manual_m),
+                    "reason": "segment_deviation_exceeds_limit",
+                    "suggested_fix": "Add intermediate waypoints to describe the intended route more locally.",
+                },
+            )
+        _append_segment_samples(
+            dense_path=dense_path,
+            poses=poses,
+            yaw_sources=yaw_sources,
+            nearest_indices=nearest_indices,
+            meta=meta,
+            segment_poses=segment_poses,
+            segment_idx=segment_idx,
+        )
+
+    waypoint_errors = _manual_waypoint_nearest_errors(normalized_waypoints, poses)
+    waypoint_error_limit = max(float(step_size), 0.1)
+    exceeding_waypoints = [row for row in waypoint_errors if float(row["nearest_dense_error_m"]) > waypoint_error_limit]
+    if preserve_manual_waypoints and exceeding_waypoints:
+        raise ManualTrajectoryBuildError(
+            "dense trajectory does not preserve manual waypoints",
+            details={
+                "manual_waypoint_nearest_dense_errors": exceeding_waypoints,
+                "reason": "manual_waypoint_not_preserved",
+                "suggested_fix": "Add intermediate waypoints or reduce snapping/deviation limits.",
+                "threshold_m": float(waypoint_error_limit),
+            },
+        )
+
+    return {
+        "dense_path": dense_path,
+        "manual_waypoint_nearest_dense_errors": waypoint_errors,
+        "nearest_indices": nearest_indices,
+        "poses": poses,
+        "segment_stats": segment_stats,
+        "warnings": warnings,
+        "yaw_sources": yaw_sources,
+    }
+
+
 def build_manual_trajectory_data(
     waypoint_document: Any,
     meta: dict[str, Any],
@@ -1548,9 +2052,19 @@ def build_manual_trajectory_data(
     usd_obstacle_bundle: dict[str, Any] | None = None,
     collision_check_mode: str = "planning_obstacle",
     allow_planning_obstacle_collisions: bool = False,
+    manual_follow_mode: str = "polyline_first",
+    max_deviation_from_manual_m: float = 0.75,
+    max_snap_distance_m: float = 0.30,
+    astar_corridor_width_m: float = 1.0,
+    direct_segment_first: bool = True,
+    fail_if_deviation_exceeds: bool = True,
+    preserve_manual_waypoints: bool = True,
+    allow_unconstrained_astar_fallback: bool = False,
 ) -> dict[str, Any]:
     document = manual_waypoint_document_to_sequence(waypoint_document)
     waypoints = document["full_waypoints"]
+    if manual_follow_mode not in {"polyline_first", "astar_unconstrained_old"}:
+        raise ValueError(f"Unsupported manual_follow_mode: {manual_follow_mode!r}")
     if yaw_mode not in {"annotated", "movement_direction"}:
         raise ValueError(f"Unsupported yaw_mode: {yaw_mode!r}")
     if yaw_interpolation != "shortest":
@@ -1582,54 +2096,87 @@ def build_manual_trajectory_data(
     if len(cells) < 2:
         raise ValueError("Fewer than two valid manual waypoints remain after validation.")
 
-    full_path: list[GridIndex] = []
-    segments: list[list[GridIndex]] = []
-    failed_segments: list[dict[str, Any]] = []
-    if connect_with_astar:
-        for segment_idx, (start, goal) in enumerate(zip(cells[:-1], cells[1:])):
-            segment = astar_path(valid_grid, start, goal, diagonal=True)
-            if not segment:
-                failed_segments.append(
-                    {
-                        "from_idx": segment_idx,
-                        "from_grid_ij": list(start),
-                        "to_grid_ij": list(goal),
-                        "to_idx": segment_idx + 1,
-                    }
-                )
-                continue
-            segments.append(segment)
-            if full_path:
-                full_path.extend(segment[1:])
-            else:
-                full_path.extend(segment)
-    else:
-        segments = [[start, goal] for start, goal in zip(cells[:-1], cells[1:])]
-        full_path = cells
-
-    if failed_segments:
-        raise ValueError(f"Manual waypoints are not connectable with A*: {failed_segments}")
-    if not full_path:
-        raise ValueError("Manual route produced an empty dense path.")
-
-    if yaw_mode == "annotated":
-        dense_path, poses, yaw_sources, nearest_indices = _annotated_segment_poses(
-            segments=segments,
+    segment_stats: list[dict[str, Any]] = []
+    manual_waypoint_nearest_dense_errors: list[dict[str, Any]] = []
+    polyline_warnings: list[str] = []
+    if manual_follow_mode == "polyline_first":
+        if yaw_mode != "annotated":
+            raise ValueError("manual_follow_mode=polyline_first requires --yaw-mode annotated.")
+        polyline = _polyline_first_trajectory(
             normalized_waypoints=normalized["waypoints"],
+            valid_grid=valid_grid,
             meta=meta,
             step_size=step_size,
             yaw_interpolation=yaw_interpolation,
-            insert_rotation_frames=insert_rotation_frames,
-            rotation_step_deg=rotation_step_deg,
+            connect_with_astar=connect_with_astar,
+            direct_segment_first=direct_segment_first,
+            max_deviation_from_manual_m=max_deviation_from_manual_m,
+            max_snap_distance_m=max_snap_distance_m,
+            astar_corridor_width_m=astar_corridor_width_m,
+            fail_if_deviation_exceeds=fail_if_deviation_exceeds,
+            preserve_manual_waypoints=preserve_manual_waypoints,
+            allow_unconstrained_astar_fallback=allow_unconstrained_astar_fallback,
+            raw_obstacle_grid=usd_obstacle_bundle.get("raw_obstacle_grid") if usd_obstacle_bundle else None,
+            planning_obstacle_grid=usd_obstacle_bundle.get("planning_obstacle_grid") if usd_obstacle_bundle else None,
         )
+        dense_path = polyline["dense_path"]
+        full_path = dense_path
+        poses = polyline["poses"]
+        yaw_sources = polyline["yaw_sources"]
+        nearest_indices = polyline["nearest_indices"]
+        segment_stats = polyline["segment_stats"]
+        manual_waypoint_nearest_dense_errors = polyline["manual_waypoint_nearest_dense_errors"]
+        polyline_warnings = polyline["warnings"]
     else:
-        dense_path = resample_grid_path(full_path, meta, step_size)
-        poses = path_to_poses(dense_path, meta)
-        yaw_sources = ["movement_direction" for _ in poses]
-        nearest_indices = [0 for _ in poses]
-        if poses:
-            start = normalized["waypoints"][0]
-            poses[0] = (float(start["x"]), float(start["y"]), normalize_yaw(float(start["yaw"])))
+        full_path: list[GridIndex] = []
+        segments: list[list[GridIndex]] = []
+        failed_segments: list[dict[str, Any]] = []
+        if connect_with_astar:
+            for segment_idx, (start, goal) in enumerate(zip(cells[:-1], cells[1:])):
+                segment = astar_path(valid_grid, start, goal, diagonal=True)
+                if not segment:
+                    failed_segments.append(
+                        {
+                            "from_idx": segment_idx,
+                            "from_grid_ij": list(start),
+                            "to_grid_ij": list(goal),
+                            "to_idx": segment_idx + 1,
+                        }
+                    )
+                    continue
+                segments.append(segment)
+                if full_path:
+                    full_path.extend(segment[1:])
+                else:
+                    full_path.extend(segment)
+        else:
+            segments = [[start, goal] for start, goal in zip(cells[:-1], cells[1:])]
+            full_path = cells
+
+        if failed_segments:
+            raise ValueError(f"Manual waypoints are not connectable with A*: {failed_segments}")
+        if not full_path:
+            raise ValueError("Manual route produced an empty dense path.")
+
+        if yaw_mode == "annotated":
+            dense_path, poses, yaw_sources, nearest_indices = _annotated_segment_poses(
+                segments=segments,
+                normalized_waypoints=normalized["waypoints"],
+                meta=meta,
+                step_size=step_size,
+                yaw_interpolation=yaw_interpolation,
+                insert_rotation_frames=insert_rotation_frames,
+                rotation_step_deg=rotation_step_deg,
+            )
+        else:
+            dense_path = resample_grid_path(full_path, meta, step_size)
+            poses = path_to_poses(dense_path, meta)
+            yaw_sources = ["movement_direction" for _ in poses]
+            nearest_indices = [0 for _ in poses]
+            if poses:
+                start = normalized["waypoints"][0]
+                poses[0] = (float(start["x"]), float(start["y"]), normalize_yaw(float(start["yaw"])))
+        manual_waypoint_nearest_dense_errors = _manual_waypoint_nearest_errors(normalized["waypoints"], poses)
     records = poses_to_records(poses, coverage_progress=[0.0] * len(poses))
     for idx, row in enumerate(records):
         row["route_source"] = "manual"
@@ -1637,7 +2184,7 @@ def build_manual_trajectory_data(
         row["yaw_source"] = yaw_sources[idx] if idx < len(yaw_sources) else yaw_mode
         row["nearest_manual_waypoint_idx"] = nearest_indices[idx] if idx < len(nearest_indices) else None
     collision_free = path_is_collision_free(full_path, valid_grid)
-    warnings: list[str] = []
+    warnings: list[str] = list(polyline_warnings)
     obstacle_stats: dict[str, Any] = {}
     if usd_obstacle_bundle is not None:
         warnings.extend(str(item) for item in usd_obstacle_bundle.get("warnings", []))
@@ -1679,18 +2226,45 @@ def build_manual_trajectory_data(
             }
             raise ValueError(f"Manual trajectory intersects USD raw/planning obstacle map: {details}")
     yaw_values = [pose[2] for pose in poses]
+    waypoint_error_values = [float(row["nearest_dense_error_m"]) for row in manual_waypoint_nearest_dense_errors]
+    segments_exceeding_deviation_limit = [
+        row for row in segment_stats if float(row.get("max_deviation_m") or 0.0) > float(max_deviation_from_manual_m)
+    ]
+    connection_methods = {
+        "corridor_astar": sum(1 for row in segment_stats if row.get("connection_method") == "corridor_astar"),
+        "direct_line": sum(1 for row in segment_stats if row.get("connection_method") == "direct_line"),
+        "unconstrained_astar": sum(1 for row in segment_stats if row.get("connection_method") == "unconstrained_astar"),
+    }
     stats = {
         "all_waypoints_have_yaw": bool(yaw_validation["all_waypoints_have_yaw"]),
+        "allow_unconstrained_astar_fallback": bool(allow_unconstrained_astar_fallback),
+        "astar_corridor_width_m": float(astar_corridor_width_m),
         "connect_with_astar": bool(connect_with_astar),
+        "connection_methods": connection_methods,
         "dense_frame_count": len(records),
+        "direct_segment_first": bool(direct_segment_first),
+        "fail_if_deviation_exceeds": bool(fail_if_deviation_exceeds),
         "full_astar_cell_count": len(full_path),
         "invalid_waypoint_count": int(normalized["invalid_waypoint_count"]),
         "insert_rotation_frames": bool(insert_rotation_frames),
+        "manual_follow_mode": manual_follow_mode,
+        "manual_waypoint_nearest_dense_errors": manual_waypoint_nearest_dense_errors,
+        "manual_waypoint_nearest_dense_max_error_m": max(waypoint_error_values) if waypoint_error_values else None,
+        "manual_waypoint_nearest_dense_mean_error_m": float(np.mean(waypoint_error_values)) if waypoint_error_values else None,
+        "max_deviation_from_manual_m": float(max_deviation_from_manual_m),
+        "max_path_deviation_from_manual_polyline_m": max(
+            [float(row.get("max_deviation_m") or 0.0) for row in segment_stats],
+            default=0.0,
+        ),
+        "max_snap_distance_m": float(max_snap_distance_m),
         "path_collision_check_passed": bool(collision_free),
         "pose_annotation_mode": document.get("pose_annotation_mode") or (POSE_ANNOTATION_MODE if yaw_mode == "annotated" else "xy_only"),
+        "preserve_manual_waypoints": bool(preserve_manual_waypoints),
         "random_seed": document.get("random_seed"),
         "rotation_step_deg": float(rotation_step_deg),
         "route_source": "manual",
+        "segment_stats": segment_stats,
+        "segments_exceeding_deviation_limit": segments_exceeding_deviation_limit,
         "snapped_waypoint_count": int(normalized["snapped_waypoint_count"]),
         "source_of_truth": meta.get("source_of_truth"),
         "start_pose_source": document.get("start_pose_source"),
@@ -1915,6 +2489,7 @@ def write_manual_trajectory_outputs(
             draw_heading_arrows=draw_heading_arrows,
             draw_waypoint_labels=draw_waypoint_labels,
             usd_obstacle_bundle=usd_obstacle_bundle,
+            segment_stats=stats.get("segment_stats") or [],
         )
         preview_doc["preview_input_source"] = preview_resolution.get("source")
         preview_doc["preview_requested_backend"] = preview_resolution.get("preview_backend")
@@ -1942,6 +2517,7 @@ def write_manual_trajectory_outputs(
                     draw_raw_obstacles=draw_raw_obstacles,
                     draw_debug_inflated_obstacles=draw_debug_inflated_obstacles,
                     collision_frame_indices=collision_frames,
+                    segment_stats=stats.get("segment_stats") or [],
                 )
                 paths["manual_trajectory_preview_photoreal_with_obstacles"] = obstacle_preview_path
                 preview_doc["manual_trajectory_preview_photoreal_with_obstacles"] = obstacle_preview_path.as_posix()
@@ -1961,10 +2537,32 @@ def write_manual_trajectory_outputs(
                 draw_raw_obstacles=True,
                 draw_debug_inflated_obstacles=True,
                 collision_frame_indices=collision_frames,
+                segment_stats=stats.get("segment_stats") or [],
             )
             paths["manual_trajectory_preview_obstacle_qa"] = obstacle_qa_path
             preview_doc["manual_trajectory_preview_obstacle_qa"] = obstacle_qa_path.as_posix()
             preview_doc["obstacle_qa_preview"] = obstacle_qa_doc
+        deviation_audit_path = out / "manual_trajectory_deviation_audit.png"
+        paths["manual_trajectory_deviation_audit"] = render_manual_trajectory_deviation_audit(
+            base_path,
+            metadata_path,
+            data["records"],
+            data["sparse_waypoints"],
+            deviation_audit_path,
+            segment_stats=stats.get("segment_stats") or [],
+        )
+        preview_doc["manual_trajectory_deviation_audit"] = deviation_audit_path.as_posix()
+        try:
+            projected_metadata = read_json(metadata_path)
+            waypoint_errors_px = _manual_waypoint_nearest_errors_px(data["sparse_waypoints"], data["records"], projected_metadata)
+            values_px = [float(row["nearest_dense_error_px"]) for row in waypoint_errors_px]
+            stats["manual_waypoint_nearest_dense_errors_px"] = waypoint_errors_px
+            stats["manual_waypoint_nearest_dense_max_error_px"] = max(values_px) if values_px else None
+            stats["manual_waypoint_nearest_dense_mean_error_px"] = float(np.mean(values_px)) if values_px else None
+        except Exception as exc:
+            stats.setdefault("warnings", []).append(
+                f"failed to compute manual waypoint nearest dense pixel error: {type(exc).__name__}: {exc}"
+            )
         shutil.copyfile(photoreal_path, default_preview_path)
         paths["manual_trajectory_preview"] = default_preview_path
     except Exception as exc:
@@ -2001,6 +2599,8 @@ def write_manual_trajectory_outputs(
         ].as_posix()
     if "manual_trajectory_preview_obstacle_qa" in paths:
         stats["manual_trajectory_preview_obstacle_qa"] = paths["manual_trajectory_preview_obstacle_qa"].as_posix()
+    if "manual_trajectory_deviation_audit" in paths:
+        stats["manual_trajectory_deviation_audit"] = paths["manual_trajectory_deviation_audit"].as_posix()
     stats["manual_trajectory_preview_metadata"] = paths["manual_trajectory_preview_metadata"].as_posix()
     stats["preview_backend"] = preview_doc.get("preview_backend")
     stats["preview_base_image"] = preview_doc.get("base_image")
@@ -2009,6 +2609,20 @@ def write_manual_trajectory_outputs(
         stats["preview_fallback_reason"] = preview_doc.get("fallback_reason")
     paths["manual_trajectory_stats"] = write_json(out / "manual_trajectory_stats.json", stats)
     return paths
+
+
+def _write_manual_trajectory_build_failure(out_dir: str | Path, exc: Exception) -> Path:
+    details = getattr(exc, "details", {}) if hasattr(exc, "details") else {}
+    doc = {
+        "error_type": type(exc).__name__,
+        "message": str(exc),
+        "reason": details.get("reason"),
+        "segment_idx": details.get("segment_idx"),
+        "suggested_fix": details.get("suggested_fix")
+        or "Add intermediate waypoints or adjust the manual route so it stays in planning-free space.",
+        "details": details,
+    }
+    return write_json(ensure_dir(out_dir) / "manual_trajectory_build_failure.json", doc)
 
 
 def build_and_write_manual_trajectory(
@@ -2038,6 +2652,14 @@ def build_and_write_manual_trajectory(
     collision_check_mode: str = "planning_obstacle",
     allow_planning_obstacle_collisions: bool = False,
     require_route_metadata_aligned: bool = False,
+    manual_follow_mode: str = "polyline_first",
+    max_deviation_from_manual_m: float = 0.75,
+    max_snap_distance_m: float = 0.30,
+    astar_corridor_width_m: float = 1.0,
+    direct_segment_first: bool = True,
+    fail_if_deviation_exceeds: bool = True,
+    preserve_manual_waypoints: bool = True,
+    allow_unconstrained_astar_fallback: bool = False,
     draw_planning_obstacles: bool = True,
     draw_raw_obstacles: bool = False,
     draw_debug_inflated_obstacles: bool = False,
@@ -2133,22 +2755,34 @@ def build_and_write_manual_trajectory(
         planning_valid = reachable_mask(planning_free, start_cell, diagonal=True)
         if not planning_valid.any():
             planning_valid = planning_free
-        data = build_manual_trajectory_data(
-            waypoints,
-            usd_meta,
-            planning_valid,
-            planning_valid,
-            snap_to_traversable=snap_to_traversable,
-            connect_with_astar=connect_with_astar,
-            step_size=step_size,
-            yaw_mode=yaw_mode,
-            yaw_interpolation=yaw_interpolation,
-            insert_rotation_frames=insert_rotation_frames,
-            rotation_step_deg=rotation_step_deg,
-            usd_obstacle_bundle=usd_bundle,
-            collision_check_mode=collision_check_mode,
-            allow_planning_obstacle_collisions=allow_planning_obstacle_collisions,
-        )
+        try:
+            data = build_manual_trajectory_data(
+                waypoints,
+                usd_meta,
+                planning_valid,
+                planning_valid,
+                snap_to_traversable=snap_to_traversable,
+                connect_with_astar=connect_with_astar,
+                step_size=step_size,
+                yaw_mode=yaw_mode,
+                yaw_interpolation=yaw_interpolation,
+                insert_rotation_frames=insert_rotation_frames,
+                rotation_step_deg=rotation_step_deg,
+                usd_obstacle_bundle=usd_bundle,
+                collision_check_mode=collision_check_mode,
+                allow_planning_obstacle_collisions=allow_planning_obstacle_collisions,
+                manual_follow_mode=manual_follow_mode,
+                max_deviation_from_manual_m=max_deviation_from_manual_m,
+                max_snap_distance_m=max_snap_distance_m,
+                astar_corridor_width_m=astar_corridor_width_m,
+                direct_segment_first=direct_segment_first,
+                fail_if_deviation_exceeds=fail_if_deviation_exceeds,
+                preserve_manual_waypoints=preserve_manual_waypoints,
+                allow_unconstrained_astar_fallback=allow_unconstrained_astar_fallback,
+            )
+        except ManualTrajectoryBuildError as exc:
+            _write_manual_trajectory_build_failure(out_dir, exc)
+            raise
         compatibility = compare_map_grid_to_usd_obstacle_map(bundle["meta"], usd_bundle["meta"])
         data["stats"]["legacy_map_grid_compatibility"] = compatibility
         data["stats"]["legacy_map_dir"] = Path(map_dir).as_posix()
@@ -2162,19 +2796,31 @@ def build_and_write_manual_trajectory(
         occupancy_for_preview = np.asarray(usd_bundle["raw_obstacle_grid"], dtype=bool)
         reachable_for_preview = planning_valid
     else:
-        data = build_manual_trajectory_data(
-            waypoints,
-            bundle["meta"],
-            bundle["reachable"],
-            bundle["traversable"],
-            snap_to_traversable=snap_to_traversable,
-            connect_with_astar=connect_with_astar,
-            step_size=step_size,
-            yaw_mode=yaw_mode,
-            yaw_interpolation=yaw_interpolation,
-            insert_rotation_frames=insert_rotation_frames,
-            rotation_step_deg=rotation_step_deg,
-        )
+        try:
+            data = build_manual_trajectory_data(
+                waypoints,
+                bundle["meta"],
+                bundle["reachable"],
+                bundle["traversable"],
+                snap_to_traversable=snap_to_traversable,
+                connect_with_astar=connect_with_astar,
+                step_size=step_size,
+                yaw_mode=yaw_mode,
+                yaw_interpolation=yaw_interpolation,
+                insert_rotation_frames=insert_rotation_frames,
+                rotation_step_deg=rotation_step_deg,
+                manual_follow_mode=manual_follow_mode,
+                max_deviation_from_manual_m=max_deviation_from_manual_m,
+                max_snap_distance_m=max_snap_distance_m,
+                astar_corridor_width_m=astar_corridor_width_m,
+                direct_segment_first=direct_segment_first,
+                fail_if_deviation_exceeds=fail_if_deviation_exceeds,
+                preserve_manual_waypoints=preserve_manual_waypoints,
+                allow_unconstrained_astar_fallback=allow_unconstrained_astar_fallback,
+            )
+        except ManualTrajectoryBuildError as exc:
+            _write_manual_trajectory_build_failure(out_dir, exc)
+            raise
         if fallback_warnings:
             data["stats"].setdefault("warnings", []).extend(fallback_warnings)
         occupancy_for_preview = bundle["occupancy"]
@@ -2382,6 +3028,24 @@ def qa_manual_route(
             failures.append("stats all_waypoints_have_yaw is not true")
         if stats.get("yaw_interpolation") != "shortest":
             failures.append(f"stats yaw_interpolation is not shortest: {stats.get('yaw_interpolation')!r}")
+        if "manual_follow_mode" in stats and stats.get("manual_follow_mode") != "polyline_first":
+            failures.append(f"stats manual_follow_mode is not polyline_first: {stats.get('manual_follow_mode')!r}")
+        if "manual_waypoint_nearest_dense_max_error_m" in stats:
+            limit = max(float(stats.get("step_size") or 0.0), 0.1)
+            if float(stats.get("manual_waypoint_nearest_dense_max_error_m") or 0.0) > limit:
+                failures.append(
+                    "stats manual_waypoint_nearest_dense_max_error_m exceeds waypoint preservation limit: "
+                    f"{stats.get('manual_waypoint_nearest_dense_max_error_m')} > {limit}"
+                )
+        if "max_path_deviation_from_manual_polyline_m" in stats:
+            max_dev = float(stats.get("max_path_deviation_from_manual_polyline_m") or 0.0)
+            dev_limit = float(stats.get("max_deviation_from_manual_m") or 0.0)
+            if max_dev > dev_limit:
+                failures.append(f"stats max_path_deviation_from_manual_polyline_m exceeds limit: {max_dev} > {dev_limit}")
+        if int((stats.get("connection_methods") or {}).get("unconstrained_astar") or 0) != 0:
+            failures.append("stats connection_methods unconstrained_astar is not zero")
+        if stats.get("segments_exceeding_deviation_limit"):
+            failures.append("stats segments_exceeding_deviation_limit is not empty")
         if int(stats.get("yaw_discontinuity_count") or 0) > max(0, int(stats.get("dense_frame_count") or 0) // 2):
             failures.append(f"stats yaw_discontinuity_count looks too high: {stats.get('yaw_discontinuity_count')!r}")
         if not isinstance(stats.get("start_pose_world"), list) or len(stats.get("start_pose_world")) != 3:

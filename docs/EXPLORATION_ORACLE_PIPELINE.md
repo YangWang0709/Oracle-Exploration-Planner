@@ -203,9 +203,9 @@ Manual annotation artifacts:
 
 Manual trajectory records must include `pose_annotation_mode=position_plus_yaw`, `yaw_source`, and `nearest_manual_waypoint_idx`. RGB-D replay metadata for user routes must include `uses_manual_yaw=true`; downstream VLM/exploration observations and action labels depend on the user-marked camera yaw, not only the XY path.
 
-`manual_route/manual_route_preview.png` is the raw user-clicked waypoint pose preview. `manual_trajectory/manual_trajectory_preview_photoreal.png` is the final A*/snap/dense trajectory preview over the photoreal topdown annotation image. After USD obstacle alignment is confirmed, `manual_trajectory/manual_trajectory_preview_photoreal_with_obstacles.png` is the primary collision review artifact because it includes the route, waypoints, headings, and `planning_obstacle_grid.npy`. `manual_trajectory/manual_trajectory_preview_obstacle_qa.png` additionally shows raw/planning/debug obstacle masks for QA. `manual_trajectory/manual_trajectory_preview_map.png` is debug-only.
+`manual_route/manual_route_preview.png` is the raw user-clicked waypoint pose preview. `manual_trajectory/manual_trajectory_preview_photoreal.png` is the final manual-polyline-first dense trajectory preview over the photoreal topdown annotation image. After USD obstacle alignment is confirmed, `manual_trajectory/manual_trajectory_preview_photoreal_with_obstacles.png` is the primary collision review artifact because it includes the route, waypoints, headings, and `planning_obstacle_grid.npy`. `manual_trajectory/manual_trajectory_deviation_audit.png` shows whether the dense path stayed close to the manual polyline. `manual_trajectory/manual_trajectory_preview_obstacle_qa.png` additionally shows raw/planning/debug obstacle masks for QA. `manual_trajectory/manual_trajectory_preview_map.png` is debug-only.
 
-The manual trajectory builder should use `--usd-obstacle-map-dir .../usd_obstacle_map_v1 --prefer-usd-obstacle-map --collision-check-mode planning_obstacle` once the overlay is aligned. The default blocker is `planning_obstacle_grid.npy`; `debug_inflated_obstacle_grid.npy` is only a conservative safety reference and should not block normal manual route planning. If a route enters a planning obstacle, re-annotate or repair the route. If it enters only debug inflation, treat it as a clearance warning.
+The manual trajectory builder should use `--manual-follow-mode polyline_first --usd-obstacle-map-dir .../usd_obstacle_map_v1 --prefer-usd-obstacle-map --collision-check-mode planning_obstacle` once the overlay is aligned. Manual waypoints are hard constraints: collision-free segments follow the user polyline directly, and A* is allowed only inside a local corridor when a segment crosses a planning obstacle. If corridor A* would deviate too far, build fails and the user should add intermediate waypoints. The default blocker is `planning_obstacle_grid.npy`; `debug_inflated_obstacle_grid.npy` is only a conservative safety reference and should not block normal manual route planning.
 
 Generated map, path, image, video, USD, blend, RGB-D, `.npy`, and dataset artifacts remain under `outputs/` or the external Infinigen tree and are not committed. Durable result summaries should be written into docs.
 
@@ -387,6 +387,13 @@ python scripts/build_manual_trajectory.py \
   --prefer-usd-obstacle-map \
   --collision-check-mode planning_obstacle \
   --require-route-metadata-aligned \
+  --manual-follow-mode polyline_first \
+  --direct-segment-first \
+  --preserve-manual-waypoints \
+  --max-deviation-from-manual-m 0.75 \
+  --max-snap-distance-m 0.30 \
+  --astar-corridor-width-m 1.00 \
+  --fail-if-deviation-exceeds \
   --preview-base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
   --preview-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --preview-mode photoreal \

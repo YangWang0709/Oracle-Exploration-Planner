@@ -59,6 +59,21 @@ def run_qa(audit_dir: str | Path) -> dict[str, Any]:
         failures.append(f"route_is_stale is not false: {report.get('route_is_stale')!r}")
     if report and diagnosis != "ok_projection_consistent":
         failures.append(f"diagnosis is not ok_projection_consistent: {diagnosis!r}")
+    if report and report.get("manual_follow_mode") not in {None, "polyline_first"}:
+        failures.append(f"manual_follow_mode is not polyline_first: {report.get('manual_follow_mode')!r}")
+    step_limit = max(_number(report.get("step_size"), default=0.0), 0.1)
+    nearest_m = report.get("manual_waypoint_nearest_dense_max_error_m")
+    if report and nearest_m is not None and _number(nearest_m, default=1e9) > step_limit:
+        failures.append(f"manual_waypoint_nearest_dense_max_error_m exceeds {step_limit}: {nearest_m!r}")
+    max_dev = report.get("max_path_deviation_from_manual_polyline_m")
+    dev_limit = report.get("max_deviation_from_manual_m")
+    if report and max_dev is not None and dev_limit is not None and _number(max_dev, default=1e9) > _number(dev_limit, default=0.0):
+        failures.append(f"max_path_deviation_from_manual_polyline_m exceeds limit: {max_dev!r} > {dev_limit!r}")
+    methods = report.get("connection_methods") or {}
+    if report and int(methods.get("unconstrained_astar") or 0) != 0:
+        failures.append(f"unconstrained_astar count is not zero: {methods.get('unconstrained_astar')!r}")
+    if report and report.get("segments_exceeding_deviation_limit"):
+        failures.append("segments_exceeding_deviation_limit is not empty")
 
     summary = {
         "audit_dir": root.as_posix(),
