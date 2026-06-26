@@ -362,6 +362,72 @@ REAL_SLAM_OUT="$OUT_ROOT/manual_route_slam_real_lidar"
 The runner uses `ros2 bag play --clock` for sim time and filters the recorded
 `/clock` topic out of playback, avoiding duplicate clock publishers and TF
 buffer resets while still requiring `/clock` in the exported bag.
+Before starting SLAM, also make sure no older `ros2 bag play --clock --loop`
+process is still running in the same ROS graph; a stale clock publisher can
+cause repeated TF buffer time-jump resets even when the target bag itself is
+monotonic.
+
+## Diagnosing Sparse Real LiDAR SLAM Maps
+
+If strict real-LiDAR SLAM produces a very sparse `map.pgm`, do not re-collect
+or tune `slam_toolbox` first. Check the real scan geometry and TF chain in
+this order:
+
+1. Confirm scan valid ratio and per-sector hit ratios from
+   `qa_real_lidar_dataset.py`.
+2. Project real LaserScan endpoints onto the photoreal topdown map:
+
+```bash
+python scripts/audit_laserscan_projection.py \
+  --dataset "$REAL_DATASET" \
+  --trajectory "$TRAJ" \
+  --photoreal-image "$OUT_ROOT/manual_annotation_photoreal_topdown_v4_with_doorway_overrides/photoreal_topdown_annotatable_obstacles.png" \
+  --photoreal-metadata "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --usd-obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1_with_doorway_overrides" \
+  --out "$OUT_ROOT/real_lidar_projection_audit" \
+  --sample-frames 0,50,100,200,400,600,800 \
+  --try-axis-variants
+```
+
+Review `scan_projection_all_samples.png`,
+`scan_hit_density_topdown.png`, and `scan_projection_report.json`. If the
+recommended variant is not `identity` and the score margin is clear, treat it
+as a LaserScan angle/frame convention problem before changing SLAM parameters.
+
+3. Audit the rosbag frame IDs, TF edges, timestamp ranges, `/clock`, and
+   `/tf_static` QoS:
+
+```bash
+source /opt/ros/humble/setup.bash
+
+/usr/bin/python3 scripts/audit_ros2_slam_bag_tf.py \
+  --bag "$REAL_BAG" \
+  --out "$OUT_ROOT/real_lidar_rosbag_tf_audit"
+```
+
+4. Run `qa_slam_map.py` and inspect `slam_map_qa.json` for `free_ratio`,
+   `occupied_ratio`, `unknown_ratio`, `non_unknown_ratio`,
+   `occupied_component_count`, bbox metrics, effective mapped area, dominant
+   value ratio, and entropy. Sparse-map warnings now call out mapped area too
+   small, occupied ratio too low, unknown ratio too high, and dominant class
+   too high.
+5. Only if projection and TF audits look correct, try the tuned indoor LiDAR
+   profile and compare map QA metrics:
+
+```bash
+/usr/bin/python3 scripts/run_slam_from_manual_route_ros2.py \
+  --dataset "$REAL_ROS2_OUT" \
+  --bag "$REAL_BAG" \
+  --slam-backend slam_toolbox \
+  --out "$OUT_ROOT/manual_route_slam_real_lidar_tuned" \
+  --run \
+  --use-sim-time \
+  --save-map \
+  --map-name "$OUT_ROOT/manual_route_slam_real_lidar_tuned/map" \
+  --timeout-sec 600 \
+  --rosbag-play-rate 2.0 \
+  --slam-profile indoor_lidar
+```
 
 Limitations: odometry is still manual trajectory ground truth, the LiDAR frame
 is mounted on the fallback `base_link` when no real robot USD is used, and scan

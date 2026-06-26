@@ -20,6 +20,11 @@ def test_slam_map_qa_passes_small_valid_map(tmp_path: Path) -> None:
 
     assert summary["passed"]
     assert summary["pixel_counts"]
+    assert summary["map_width"] == 2
+    assert summary["map_height"] == 2
+    assert summary["occupied_component_count"] == 1
+    assert summary["effective_mapped_area_m2"] == 3 * 0.05 * 0.05
+    assert summary["dominant_value"] == 254
 
 
 def test_slam_map_qa_fails_fake_map(tmp_path: Path) -> None:

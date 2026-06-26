@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--bag", default=None)
     parser.add_argument("--slam-backend", default="slam_toolbox", choices=("slam_toolbox",))
+    parser.add_argument("--slam-profile", default="default", choices=("default", "indoor_lidar"))
     parser.add_argument("--out", required=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--run", action="store_true")
@@ -72,7 +73,19 @@ def _ros_pkg_available(package: str) -> bool:
     return result.returncode == 0 and package in set(result.stdout.split())
 
 
-def _write_slam_params(path: Path, *, use_sim_time: bool, scan_topic: str = "/scan") -> Path:
+def _write_slam_params(path: Path, *, use_sim_time: bool, scan_topic: str = "/scan", slam_profile: str = "default") -> Path:
+    if slam_profile == "indoor_lidar":
+        transform_timeout = 0.5
+        tf_buffer_duration = 60.0
+        map_update_interval = 0.2
+        publish_period = 1.0
+        extra = "    minimum_travel_distance: 0.05\n    minimum_travel_heading: 0.05\n"
+    else:
+        transform_timeout = 0.2
+        tf_buffer_duration = 30.0
+        map_update_interval = 1.0
+        publish_period = 1.0
+        extra = ""
     text = f"""slam_toolbox:
   ros__parameters:
     use_sim_time: {str(bool(use_sim_time)).lower()}
@@ -84,13 +97,15 @@ def _write_slam_params(path: Path, *, use_sim_time: bool, scan_topic: str = "/sc
     resolution: 0.05
     max_laser_range: 20.0
     minimum_time_interval: 0.0
-    transform_timeout: 0.2
-    tf_buffer_duration: 30.0
-    map_update_interval: 1.0
+    transform_timeout: {transform_timeout}
+    tf_buffer_duration: {tf_buffer_duration}
+    map_update_interval: {map_update_interval}
+{extra.rstrip()}
     throttle_scans: 1
-    publish_period: 1.0
+    publish_period: {publish_period}
     debug_logging: false
 """
+    text = text.replace("\n\n    throttle_scans", "\n    throttle_scans")
     path.write_text(text, encoding="utf-8")
     return path
 
@@ -204,7 +219,7 @@ def _prepare_slam_params(args: argparse.Namespace, out: Path) -> Path:
         if source.resolve() != target.resolve():
             shutil.copy2(source, target)
         return target
-    _write_slam_params(target, use_sim_time=bool(args.use_sim_time))
+    _write_slam_params(target, use_sim_time=bool(args.use_sim_time), slam_profile=str(getattr(args, "slam_profile", "default")))
     return target
 
 
@@ -332,6 +347,7 @@ def build_slam_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "params_input": params_path.as_posix() if params_path else None,
         "ros_environment": env,
         "slam_backend": _arg(args, "slam_backend", "slam_toolbox"),
+        "slam_profile": _arg(args, "slam_profile", "default"),
         "success": False,
         "topic_message_counts": topic_counts,
         "topics_available": topics,

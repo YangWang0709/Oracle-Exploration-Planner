@@ -163,6 +163,23 @@ def test_external_slam_params_are_copied_to_output(tmp_path: Path, monkeypatch) 
     assert (out / "slam_toolbox_params.yaml").read_text(encoding="utf-8") == "external_params: true\n"
 
 
+def test_indoor_lidar_profile_writes_tuned_params(tmp_path: Path, monkeypatch) -> None:
+    bag = tmp_path / "ros2" / "rosbag2" / "bag"
+    out = tmp_path / "slam"
+    _write_bag_metadata(bag)
+    _patch_successful_runtime(monkeypatch, tmp_path)
+    args = Args(tmp_path / "ros2", bag, out, run=True)
+    args.slam_profile = "indoor_lidar"
+
+    metadata = run_slam(args)
+
+    text = (out / "slam_toolbox_params.yaml").read_text(encoding="utf-8")
+    assert metadata["success"] is True
+    assert metadata["slam_profile"] == "indoor_lidar"
+    assert "minimum_travel_distance: 0.05" in text
+    assert "tf_buffer_duration: 60.0" in text
+
+
 def test_map_missing_keeps_success_false_and_logs_stage(tmp_path: Path, monkeypatch) -> None:
     bag = tmp_path / "ros2" / "rosbag2" / "bag"
     out = tmp_path / "slam"

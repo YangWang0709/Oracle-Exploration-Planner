@@ -40,6 +40,15 @@ collect with `--enable-real-lidar --enable-real-2d-laserscan
 RangeSensor, PhysX scene-query, or the explicit USD geometry raycast fallback
 is unavailable, collection must fail rather than inventing `/scan`.
 
+Sparse real-LiDAR maps are diagnosed before re-collection or SLAM tuning:
+check scan valid/sector ratios, run `scripts/audit_laserscan_projection.py`
+to project `/scan` endpoints onto the photoreal topdown image and compare
+axis/yaw variants, run `scripts/audit_ros2_slam_bag_tf.py` on the rosbag, then
+inspect the enhanced `scripts/qa_slam_map.py` metrics. Only when endpoint
+projection and TF timing look correct should
+`scripts/run_slam_from_manual_route_ros2.py --slam-profile indoor_lidar` be
+used for a tuned comparison.
+
 Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 
 Manual route annotation is implemented with `scripts/render_manual_annotation_semantic_floorplan.py`, `scripts/render_manual_annotation_photoreal_topdown_isaac.py`, `scripts/render_manual_annotation_obstacle_base.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. Manual routes are pose routes: every waypoint records adjusted USD world `x`, `y`, and user-annotated `yaw`. Semantic floorplans are best for furniture/category readability; the current recommended photoreal base is `photoreal_topdown_annotatable_obstacles.png`, which overlays planning obstacles on the real topdown render without changing the clean image transform. Geometry footprints are debug-only. The previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
