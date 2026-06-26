@@ -196,6 +196,7 @@ def build_rosbag_export_plan(
     topic_tf_static: str = "/tf_static",
     topic_clock: str = "/clock",
     require_scan: bool = False,
+    require_real_scan: bool = False,
     allow_depth_derived_scan: bool = False,
     write_rgb: bool = False,
     write_depth: bool = False,
@@ -209,11 +210,13 @@ def build_rosbag_export_plan(
     metadata, manifest_rows, trajectory_rows = _load_dataset_rows(dataset_path, trajectory_path, max_frames=max_frames)
     params = scan_params or LaserScanParams(frame_id=frame_id_laser)
     source = select_scan_source(dataset_path, allow_depth_derived_scan=allow_depth_derived_scan)
-    if require_scan and source.depth_derived:
+    if (require_scan or require_real_scan) and source.depth_derived:
         raise FileNotFoundError(
             "No real LaserScan/LiDAR source found. Re-run multisensor collection with a LiDAR backend, "
             "or pass --allow-depth-derived-scan for debug-only mapping."
         )
+    if require_real_scan and source.quality == "debug_only_not_final_robot_lidar":
+        raise FileNotFoundError("A real LaserScan/LiDAR source is required, but the selected scan source is debug depth-derived.")
     topic_types = _topic_types(
         topic_scan=topic_scan,
         topic_odom=topic_odom,
@@ -241,6 +244,7 @@ def build_rosbag_export_plan(
         "message_types": topic_types,
         "odometry_source": "manual_trajectory_ground_truth",
         "require_scan": bool(require_scan),
+        "require_real_scan": bool(require_real_scan),
         "route_is_user_annotated": True,
         "route_source": "manual",
         "scan_count": len(manifest_rows),
@@ -278,6 +282,7 @@ def export_dataset_to_rosbag2(
     topic_tf_static: str = "/tf_static",
     topic_clock: str = "/clock",
     require_scan: bool = False,
+    require_real_scan: bool = False,
     allow_depth_derived_scan: bool = False,
     write_rgb: bool = False,
     write_depth: bool = False,
@@ -309,11 +314,13 @@ def export_dataset_to_rosbag2(
             }
         )
         source: ScanSource = select_scan_source(dataset_path, allow_depth_derived_scan=allow_depth_derived_scan)
-        if require_scan and source.depth_derived:
+        if (require_scan or require_real_scan) and source.depth_derived:
             raise FileNotFoundError(
                 "No real LaserScan/LiDAR source found. Re-run multisensor collection with a LiDAR backend, "
                 "or pass --allow-depth-derived-scan for debug-only mapping."
             )
+        if require_real_scan and source.quality == "debug_only_not_final_robot_lidar":
+            raise FileNotFoundError("A real LaserScan/LiDAR source is required, but the selected scan source is debug depth-derived.")
         plan = build_rosbag_export_plan(
             dataset=dataset_path,
             trajectory=trajectory_path,
@@ -330,6 +337,7 @@ def export_dataset_to_rosbag2(
             topic_tf_static=topic_tf_static,
             topic_clock=topic_clock,
             require_scan=require_scan,
+            require_real_scan=require_real_scan,
             allow_depth_derived_scan=allow_depth_derived_scan,
             write_rgb=write_rgb,
             write_depth=write_depth,

@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
+import traceback
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,6 +20,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from oracle_explorer.io_utils import ensure_dir, read_json, read_jsonl, write_json, write_jsonl
+from oracle_explorer.isaac_multisensor import (
+    RealLidarConfig,
+    RealLidarUnavailable,
+    check_lidar_capabilities,
+    collect_real_lidar_frames,
+    real_lidar_metadata_update,
+    select_real_lidar_backend,
+)
 from oracle_explorer.sensors.lidar import detect_lidar_backend, lidar_config, unavailable_lidar_status
 from oracle_explorer.sensors.pointcloud import depth_to_pointcloud, pointcloud_stats, save_pointcloud_npy, save_pointcloud_ply
 
@@ -60,6 +70,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-depth-pointcloud", action="store_true")
     parser.add_argument("--enable-3d-lidar", action="store_true")
     parser.add_argument("--enable-2d-laserscan", action="store_true")
+    parser.add_argument("--enable-real-lidar", action="store_true")
+    parser.add_argument("--lidar-backend", choices=("auto", "rtx", "range_sensor", "physx", "usd_raycast"), default="auto")
+    parser.add_argument("--enable-real-2d-laserscan", action="store_true")
+    parser.add_argument("--enable-real-3d-lidar", action="store_true")
+    parser.add_argument("--lidar-frame-id", default="laser")
+    parser.add_argument("--lidar-height-m", type=float, default=0.25)
+    parser.add_argument("--lidar-yaw-offset-rad", type=float, default=0.0)
+    parser.add_argument("--scan-angle-min", type=float, default=-math.pi)
+    parser.add_argument("--scan-angle-max", type=float, default=math.pi)
+    parser.add_argument("--scan-angle-increment", type=float, default=0.008726646)
+    parser.add_argument("--scan-range-min", type=float, default=0.10)
+    parser.add_argument("--scan-range-max", type=float, default=20.0)
+    parser.add_argument("--lidar-horizontal-resolution-deg", type=float, default=0.5)
+    parser.add_argument("--lidar-vertical-resolution-deg", type=float, default=1.0)
+    parser.add_argument("--require-real-lidar", action="store_true")
     parser.add_argument("--lidar-horizontal-fov-deg", type=float, default=360.0)
     parser.add_argument("--lidar-vertical-fov-deg", type=float, default=30.0)
     parser.add_argument("--lidar-max-range-m", type=float, default=20.0)
@@ -124,7 +149,33 @@ def _sensor_pose_from_base(base_pose: list[Any], z_m: float) -> dict[str, Any]:
     }
 
 
+def _real_lidar_requested(args: argparse.Namespace) -> bool:
+    return bool(args.enable_real_lidar or args.enable_real_2d_laserscan or args.enable_real_3d_lidar or args.require_real_lidar)
+
+
+def _real_lidar_config(args: argparse.Namespace) -> RealLidarConfig:
+    enable_2d = bool(args.enable_real_2d_laserscan or ((args.enable_real_lidar or args.require_real_lidar) and not args.enable_real_3d_lidar))
+    enable_3d = bool(args.enable_real_3d_lidar)
+    return RealLidarConfig(
+        angle_increment=float(args.scan_angle_increment),
+        angle_max=float(args.scan_angle_max),
+        angle_min=float(args.scan_angle_min),
+        backend=args.lidar_backend,
+        enable_laserscan_2d=enable_2d,
+        enable_lidar_3d=enable_3d,
+        frame_id=args.lidar_frame_id,
+        horizontal_resolution_deg=float(args.lidar_horizontal_resolution_deg),
+        mount_height_m=float(args.lidar_height_m),
+        range_max=float(args.scan_range_max),
+        range_min=float(args.scan_range_min),
+        vertical_fov_deg=float(args.lidar_vertical_fov_deg),
+        vertical_resolution_deg=float(args.lidar_vertical_resolution_deg),
+        yaw_offset_rad=float(args.lidar_yaw_offset_rad),
+    )
+
+
 def _write_tf_static(out: Path, args: argparse.Namespace, lidar_cfg: dict[str, Any]) -> dict[str, Any]:
+    lidar_height = float(lidar_cfg.get("mount_height_m", args.camera_height_m))
     tf_static = {
         "frames": [
             {
@@ -143,7 +194,7 @@ def _write_tf_static(out: Path, args: argparse.Namespace, lidar_cfg: dict[str, A
                 "child_frame_id": lidar_cfg["frame_id"],
                 "frame_id": "base_link",
                 "rotation_quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
-                "translation_xyz": [0.0, 0.0, float(args.camera_height_m)],
+                "translation_xyz": [0.0, 0.0, lidar_height],
             },
         ],
         "sensor_extrinsics": {
@@ -153,7 +204,7 @@ def _write_tf_static(out: Path, args: argparse.Namespace, lidar_cfg: dict[str, A
             },
             "lidar_link_from_base_link": {
                 "rotation_quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
-                "translation_xyz": [0.0, 0.0, float(args.camera_height_m)],
+                "translation_xyz": [0.0, 0.0, lidar_height],
             },
         },
     }
@@ -231,7 +282,12 @@ def _generate_depth_pointclouds(
     return summary
 
 
-def augment_multisensor_dataset(args: argparse.Namespace, *, dry_run_report: dict[str, Any] | None = None) -> dict[str, Any]:
+def augment_multisensor_dataset(
+    args: argparse.Namespace,
+    *,
+    dry_run_report: dict[str, Any] | None = None,
+    isaac_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     out = ensure_dir(args.out)
     ensure_dir(out / "debug")
     metadata_path = out / "metadata.json"
@@ -242,13 +298,15 @@ def augment_multisensor_dataset(args: argparse.Namespace, *, dry_run_report: dic
     lidar_cfg = lidar_config(
         horizontal_fov_deg=args.lidar_horizontal_fov_deg,
         vertical_fov_deg=args.lidar_vertical_fov_deg,
-        max_range_m=args.lidar_max_range_m,
-        min_range_m=args.lidar_min_range_m,
+        max_range_m=args.scan_range_max if _real_lidar_requested(args) else args.lidar_max_range_m,
+        min_range_m=args.scan_range_min if _real_lidar_requested(args) else args.lidar_min_range_m,
         rotation_rate_hz=args.lidar_rotation_rate_hz,
+        frame_id=args.lidar_frame_id if _real_lidar_requested(args) else "lidar_link",
     )
+    lidar_cfg["mount_height_m"] = float(args.lidar_height_m if _real_lidar_requested(args) else args.camera_height_m)
     tf_static = _write_tf_static(out, args, lidar_cfg)
     for row in manifest_rows:
-        row["lidar_pose_world"] = _sensor_pose_from_base(row["base_pose_world"], float(args.camera_height_m))
+        row["lidar_pose_world"] = _sensor_pose_from_base(row["base_pose_world"], float(lidar_cfg["mount_height_m"]))
     _write_odometry(out, manifest_rows)
 
     depth_pc_summary: dict[str, Any] | None = None
@@ -286,6 +344,46 @@ def augment_multisensor_dataset(args: argparse.Namespace, *, dry_run_report: dic
     else:
         lidar_status.update({"lidar_backend_available": False, "lidar_backend_reason": "LiDAR collection was not requested.", "lidar_config": lidar_cfg})
 
+    if _real_lidar_requested(args):
+        real_config = _real_lidar_config(args)
+        lidar_capabilities = check_lidar_capabilities()
+        lidar_status.update(
+            {
+                "isaac_lidar_capabilities": lidar_capabilities,
+                "real_lidar_enabled": bool(real_config.enable_laserscan_2d or real_config.enable_lidar_3d),
+            }
+        )
+        try:
+            selected_backend = select_real_lidar_backend(real_config.backend, lidar_capabilities)
+            collection = collect_real_lidar_frames(
+                dataset=out,
+                scene_usd=args.scene_usd,
+                manifest_rows=manifest_rows,
+                config=real_config,
+                backend=selected_backend,
+                headless=bool(args.headless),
+                world=(isaac_context or {}).get("world"),
+            )
+            lidar_status.update(real_lidar_metadata_update(real_config, selected_backend, collection))
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            lidar_status.update(
+                {
+                    "depth_derived_scan": False,
+                    "laserscan_2d_available": False,
+                    "lidar_3d_available": False,
+                    "lidar_backend": args.lidar_backend,
+                    "lidar_backend_available": False,
+                    "lidar_backend_reason": reason,
+                    "real_lidar_collection_failed": True,
+                    "scan_quality": None,
+                    "scan_source": None,
+                }
+            )
+            write_json(out / "debug" / "real_lidar_collection_error.json", {"error": reason, "capabilities": lidar_capabilities})
+            if args.require_real_lidar:
+                raise RealLidarUnavailable(reason) from exc
+
     if manifest_rows:
         write_jsonl(manifest_path, manifest_rows)
 
@@ -293,8 +391,8 @@ def augment_multisensor_dataset(args: argparse.Namespace, *, dry_run_report: dic
         "depth_pointcloud": bool(args.enable_depth_pointcloud),
         "depth": bool(args.enable_depth),
         "distance_to_camera": bool(args.enable_depth),
-        "laserscan_2d": bool(args.enable_2d_laserscan),
-        "lidar_3d": bool(args.enable_3d_lidar),
+        "laserscan_2d": bool(args.enable_2d_laserscan or lidar_status.get("laserscan_2d_available")),
+        "lidar_3d": bool(args.enable_3d_lidar or lidar_status.get("lidar_3d_available")),
         "rgb": bool(args.enable_rgb),
     }
     metadata.update(
@@ -327,9 +425,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     rgbd_args = _rgbd_args(args)
     if args.dry_run:
         dry_run_report = run_rgbd_dry_run(rgbd_args)
+        metadata = augment_multisensor_dataset(args, dry_run_report=dry_run_report)
     else:
+        metadata_holder: dict[str, Any] = {}
+
+        def _post_rgbd_callback(context: dict[str, Any]) -> dict[str, Any]:
+            metadata_holder["metadata"] = augment_multisensor_dataset(args, dry_run_report=None, isaac_context=context)
+            return metadata_holder["metadata"]
+
+        rgbd_args.close_simulation_app = False
+        rgbd_args.post_rgbd_callback = _post_rgbd_callback
         run_rgbd_isaac_collection(rgbd_args)
-    metadata = augment_multisensor_dataset(args, dry_run_report=dry_run_report)
+        metadata = metadata_holder.get("metadata")
+        if metadata is None:
+            metadata = augment_multisensor_dataset(args, dry_run_report=None)
     manual_waypoints = infer_manual_waypoints_path(trajectory_path, "manual")
     metadata["manual_waypoints"] = manual_waypoints.as_posix() if manual_waypoints else metadata.get("manual_waypoints")
     write_json(Path(args.out) / "metadata.json", metadata)
@@ -338,8 +447,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> None:
     args = parse_args()
-    metadata = run(args)
-    print(json.dumps(metadata, indent=2, sort_keys=True))
+    try:
+        metadata = run(args)
+        print(json.dumps(metadata, indent=2, sort_keys=True))
+        sys.stdout.flush()
+        sys.stderr.flush()
+        if not args.dry_run:
+            os._exit(0)
+    except Exception:
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        if not args.dry_run:
+            os._exit(1)
+        raise
 
 
 if __name__ == "__main__":

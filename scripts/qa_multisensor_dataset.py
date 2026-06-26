@@ -113,7 +113,7 @@ def run_qa(dataset: str | Path, *, expected_frames: int | None = None, min_finit
     depth_count = _count_files(root, "sensors/depth/*.npy")
     distance_count = _count_files(root, "sensors/distance_to_camera/*.npy")
     depth_pc_count = _count_files(root, "sensors/depth_pointcloud/*.npy")
-    lidar_count = _count_files(root, "sensors/lidar_3d/*.npy")
+    lidar_count = _count_files(root, "sensors/lidar_3d/*.npy") + _count_files(root, "sensors/lidar_3d/*.npz")
     scan_json_count = _count_files(root, "sensors/laserscan_2d/*.json")
     scan_npy_count = _count_files(root, "sensors/laserscan_2d/*.npy")
 

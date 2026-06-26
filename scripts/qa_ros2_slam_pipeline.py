@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--ros2-dir", required=True)
     parser.add_argument("--slam-dir", required=True)
+    parser.add_argument("--require-real-scan", action="store_true")
     return parser.parse_args()
 
 
@@ -40,7 +41,7 @@ def _default_bag(ros2_dir: Path) -> Path | None:
     return None
 
 
-def run_qa(dataset: str | Path, ros2_dir: str | Path, slam_dir: str | Path) -> dict[str, Any]:
+def run_qa(dataset: str | Path, ros2_dir: str | Path, slam_dir: str | Path, *, require_real_scan: bool = False) -> dict[str, Any]:
     dataset_path = Path(dataset)
     ros2_path = Path(ros2_dir)
     slam_path = Path(slam_dir)
@@ -62,6 +63,13 @@ def run_qa(dataset: str | Path, ros2_dir: str | Path, slam_dir: str | Path) -> d
             failures.append("dataset route_is_user_annotated is not true")
         if "trajectory_usd_blender/dense_trajectory.jsonl" in str(dataset_metadata.get("trajectory", "")):
             failures.append("dataset uses automatic trajectory_usd_blender path")
+        if require_real_scan:
+            if dataset_metadata.get("depth_derived_scan") is True:
+                failures.append("dataset depth_derived_scan is true but real scan is required")
+            if dataset_metadata.get("scan_quality") == "debug_only_not_final_robot_lidar":
+                failures.append("dataset scan_quality is debug-only but real scan is required")
+            if dataset_metadata.get("real_lidar_enabled") is not True:
+                failures.append("dataset real_lidar_enabled is not true but real scan is required")
 
     ros2_metadata_path = ros2_path / "metadata.json"
     if not ros2_path.exists():
@@ -76,13 +84,20 @@ def run_qa(dataset: str | Path, ros2_dir: str | Path, slam_dir: str | Path) -> d
             failures.append(f"ros2 route_source is not manual: {ros2_metadata.get('route_source')!r}")
         if ros2_metadata.get("depth_derived_scan") is True:
             warnings.append("rosbag scan source is depth-derived debug-only")
+        if require_real_scan:
+            if ros2_metadata.get("depth_derived_scan") is True:
+                failures.append("ros2 metadata depth_derived_scan is true but real scan is required")
+            if ros2_metadata.get("scan_quality") == "debug_only_not_final_robot_lidar":
+                failures.append("ros2 metadata scan_quality is debug-only but real scan is required")
+            if not ros2_metadata.get("scan_source") or str(ros2_metadata.get("scan_source")).startswith("depth_"):
+                failures.append(f"ros2 metadata scan_source is not real: {ros2_metadata.get('scan_source')!r}")
 
     bag_path = _default_bag(ros2_path)
     bag_summary: dict[str, Any] | None = None
     if not bag_path:
         failures.append("rosbag directory not found under ros2 output")
     else:
-        bag_summary = run_bag_qa(bag_path, expect_scan=True, expect_tf=True, expect_odom=True)
+        bag_summary = run_bag_qa(bag_path, expect_scan=True, expect_tf=True, expect_odom=True, require_real_scan=require_real_scan)
         if not bag_summary["passed"]:
             failures.extend(f"bag QA: {failure}" for failure in bag_summary["failures"])
         warnings.extend(f"bag QA: {warning}" for warning in bag_summary.get("warnings", []))
@@ -108,6 +123,7 @@ def run_qa(dataset: str | Path, ros2_dir: str | Path, slam_dir: str | Path) -> d
         "failures": failures,
         "map_qa": map_summary,
         "passed": not failures,
+        "require_real_scan": bool(require_real_scan),
         "ros2_dir": ros2_path.as_posix(),
         "slam_dir": slam_path.as_posix(),
         "warnings": warnings,
@@ -119,7 +135,7 @@ def run_qa(dataset: str | Path, ros2_dir: str | Path, slam_dir: str | Path) -> d
 
 def main() -> None:
     args = parse_args()
-    summary = run_qa(args.dataset, args.ros2_dir, args.slam_dir)
+    summary = run_qa(args.dataset, args.ros2_dir, args.slam_dir, require_real_scan=bool(args.require_real_scan))
     print(json.dumps(summary, indent=2, sort_keys=True))
     raise SystemExit(0 if summary["passed"] else 1)
 

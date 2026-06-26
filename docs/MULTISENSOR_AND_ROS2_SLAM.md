@@ -240,6 +240,133 @@ python scripts/export_multisensor_dataset_to_rosbag2.py \
   --write-depth-points
 ```
 
+## Real Isaac LiDAR / LaserScan SLAM
+
+The debug SLAM path used `scan_source=depth_pointcloud_derived` and
+`scan_quality=debug_only_not_final_robot_lidar`. That path is useful for ROS2
+plumbing only. Final strict SLAM requires a dataset with
+`sensors/laserscan_2d/` or `sensors/lidar_3d/` collected from an Isaac LiDAR
+backend, with `depth_derived_scan=false`.
+
+Check Isaac LiDAR support from the Isaac Python environment:
+
+```bash
+cd "/home/ubuntu22/Oracle Exploration Planner"
+OUT_ROOT="outputs/exploration_dataset/seed_201_final_usd_test"
+
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/check_isaac_lidar_capabilities.py \
+  --out "$OUT_ROOT/isaac_lidar_capabilities"
+```
+
+`--lidar-backend auto` selects only true Isaac backends in this priority:
+RTX LiDAR, RangeSensor LiDAR, then PhysX scene-query LiDAR. The
+`usd_raycast` backend is an explicit geometry raycast fallback only; it must
+trace the loaded USD mesh geometry and is marked
+`geometry_raycast_fallback_not_rtx_lidar`. If no requested backend is
+available, collection fails instead of producing a fake LiDAR scan.
+
+Run a 10-frame real-LiDAR smoke collection:
+
+```bash
+SCENE_USD="/home/ubuntu22/infinigen/outputs/production_final_seed201_timing/seed_201/usd/export_scene.blend/export_scene.usdc"
+TRAJ="$OUT_ROOT/manual_trajectory/manual_dense_trajectory.jsonl"
+
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/replay_manual_route_collect_multisensor_isaac.py \
+  --scene-id "seed_201_final_manual_real_lidar_smoke" \
+  --scene-usd "$SCENE_USD" \
+  --trajectory "$TRAJ" \
+  --out "$OUT_ROOT/manual_route_multisensor_real_lidar_smoke" \
+  --robot none \
+  --allow-xform-fallback-robot \
+  --camera-width 640 \
+  --camera-height 480 \
+  --camera-height-m 1.25 \
+  --enable-rgb \
+  --enable-depth \
+  --enable-depth-pointcloud \
+  --enable-real-lidar \
+  --enable-real-2d-laserscan \
+  --lidar-backend auto \
+  --lidar-frame-id laser \
+  --lidar-height-m 0.25 \
+  --headless \
+  --max-frames 10 \
+  --require-real-lidar \
+  --fail-on-black-rgb \
+  --min-rgb-mean-brightness 5.0
+
+python scripts/qa_real_lidar_dataset.py \
+  --dataset "$OUT_ROOT/manual_route_multisensor_real_lidar_smoke" \
+  --expected-frames 10 \
+  --require-real-lidar \
+  --expect-laserscan
+```
+
+When the smoke passes, remove `--max-frames 10` and write the full dataset to
+`$OUT_ROOT/manual_route_multisensor_real_lidar_full`.
+
+Export strict rosbag2 without depth-derived fallback:
+
+```bash
+source /opt/ros/humble/setup.bash
+REAL_DATASET="$OUT_ROOT/manual_route_multisensor_real_lidar_full"
+REAL_ROS2_OUT="$OUT_ROOT/manual_route_ros2_real_lidar"
+REAL_BAG="$REAL_ROS2_OUT/rosbag2/seed_201_final_manual_slam_real_lidar"
+
+/usr/bin/python3 scripts/export_multisensor_dataset_to_rosbag2.py \
+  --dataset "$REAL_DATASET" \
+  --trajectory "$TRAJ" \
+  --out "$REAL_ROS2_OUT" \
+  --bag-name "seed_201_final_manual_slam_real_lidar" \
+  --require-scan \
+  --require-real-scan \
+  --write-rgb \
+  --write-depth \
+  --write-depth-points
+
+/usr/bin/python3 scripts/qa_ros2_multisensor_bag.py \
+  --bag "$REAL_BAG" \
+  --expect-scan \
+  --expect-tf \
+  --expect-odom \
+  --require-real-scan
+```
+
+Run `slam_toolbox` and strict pipeline QA:
+
+```bash
+REAL_SLAM_OUT="$OUT_ROOT/manual_route_slam_real_lidar"
+
+/usr/bin/python3 scripts/run_slam_from_manual_route_ros2.py \
+  --dataset "$REAL_ROS2_OUT" \
+  --bag "$REAL_BAG" \
+  --slam-backend slam_toolbox \
+  --out "$REAL_SLAM_OUT" \
+  --run \
+  --use-sim-time \
+  --save-map \
+  --map-name "$REAL_SLAM_OUT/map" \
+  --timeout-sec 300 \
+  --rosbag-play-rate 3.0
+
+/usr/bin/python3 scripts/qa_slam_map.py \
+  --slam-dir "$REAL_SLAM_OUT"
+
+/usr/bin/python3 scripts/qa_ros2_slam_pipeline.py \
+  --dataset "$REAL_DATASET" \
+  --ros2-dir "$REAL_ROS2_OUT" \
+  --slam-dir "$REAL_SLAM_OUT" \
+  --require-real-scan
+```
+
+The runner uses `ros2 bag play --clock` for sim time and filters the recorded
+`/clock` topic out of playback, avoiding duplicate clock publishers and TF
+buffer resets while still requiring `/clock` in the exported bag.
+
+Limitations: odometry is still manual trajectory ground truth, the LiDAR frame
+is mounted on the fallback `base_link` when no real robot USD is used, and scan
+quality depends on the available Isaac backend.
+
 QA the rosbag:
 
 ```bash
@@ -287,9 +414,15 @@ python scripts/qa_ros2_slam_pipeline.py \
 Open RViz after sourcing ROS2:
 
 ```bash
-ros2 bag play "$OUT_ROOT/manual_route_ros2/rosbag2/seed_201_final_manual_slam" --clock --loop
+ros2 bag play "$OUT_ROOT/manual_route_ros2/rosbag2/seed_201_final_manual_slam" \
+  --clock \
+  --loop \
+  --topics /tf /tf_static /odom /scan
 scripts/open_slam_map_rviz2.sh
 ```
+
+When using `--clock`, keep the recorded `/clock` topic out of the played topic
+list so there is only one `/clock` publisher.
 
 Limitations:
 

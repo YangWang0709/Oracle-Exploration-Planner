@@ -106,6 +106,20 @@ def _command_string(cmd: list[str] | None) -> str | None:
     return " ".join(cmd) if cmd else None
 
 
+def _bag_play_topics(*, use_sim_time: bool) -> list[str]:
+    if use_sim_time:
+        return [topic for topic in REQUIRED_SLAM_TOPICS if topic != "/clock"]
+    return list(REQUIRED_SLAM_TOPICS)
+
+
+def _bag_play_command(ros2: str, bag_path: str | Path, *, rate: float, use_sim_time: bool) -> list[str]:
+    cmd = [ros2, "bag", "play", Path(bag_path).as_posix(), "--rate", str(float(rate))]
+    cmd.extend(["--topics", *_bag_play_topics(use_sim_time=use_sim_time)])
+    if use_sim_time:
+        cmd.append("--clock")
+    return cmd
+
+
 def _append_log(log_path: Path, text: str) -> None:
     with log_path.open("a", encoding="utf-8") as f:
         f.write(text.rstrip() + "\n")
@@ -288,11 +302,10 @@ def build_slam_metadata(args: argparse.Namespace) -> dict[str, Any]:
         f"use_sim_time:={str(bool(_arg(args, 'use_sim_time', False))).lower()}",
     ]
     bag_cmd = None
+    use_sim_time = bool(_arg(args, "use_sim_time", False))
+    play_topics = _bag_play_topics(use_sim_time=use_sim_time)
     if bag_path:
-        bag_cmd = [ros2, "bag", "play", bag_path.as_posix(), "--rate", str(float(_arg(args, "rosbag_play_rate", 1.0)))]
-        bag_cmd.extend(["--topics", *REQUIRED_SLAM_TOPICS])
-        if _arg(args, "use_sim_time", False):
-            bag_cmd.append("--clock")
+        bag_cmd = _bag_play_command(ros2, bag_path, rate=float(_arg(args, "rosbag_play_rate", 1.0)), use_sim_time=use_sim_time)
     save_cmd = [
         ros2,
         "run",
@@ -323,11 +336,12 @@ def build_slam_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "topic_message_counts": topic_counts,
         "topics_available": topics,
         "topics_required": REQUIRED_SLAM_TOPICS,
-        "topics_used": REQUIRED_SLAM_TOPICS,
-        "use_sim_time": bool(_arg(args, "use_sim_time", False)),
+        "topics_played": play_topics,
+        "topics_used": play_topics,
+        "use_sim_time": use_sim_time,
     }
     write_json(out / "slam_metadata.json", metadata)
-    write_json(out / "slam_topics.json", {"available": topics, "required": REQUIRED_SLAM_TOPICS, "message_counts": topic_counts})
+    write_json(out / "slam_topics.json", {"available": topics, "required": REQUIRED_SLAM_TOPICS, "played": play_topics, "message_counts": topic_counts})
     if not (out / "slam_run.log").exists():
         (out / "slam_run.log").write_text(
             "SLAM map has not been generated.\n"
@@ -405,10 +419,7 @@ def run_slam(args: argparse.Namespace) -> dict[str, Any]:
             failure_stage = "start_slam_toolbox"
             failure_reason = f"slam_toolbox exited early with returncode {slam_proc.returncode}"
         else:
-            bag_cmd = [ros2, "bag", "play", metadata["input_rosbag"], "--rate", str(float(args.rosbag_play_rate))]
-            bag_cmd.extend(["--topics", *REQUIRED_SLAM_TOPICS])
-            if args.use_sim_time:
-                bag_cmd.append("--clock")
+            bag_cmd = _bag_play_command(ros2, metadata["input_rosbag"], rate=float(args.rosbag_play_rate), use_sim_time=bool(args.use_sim_time))
             metadata["commands"]["bag_play"] = _command_string(bag_cmd)
             bag_proc = _start_process(bag_cmd, log_path)
             _append_log(log_path, f"[stage] bag play started pid={bag_proc.pid}")

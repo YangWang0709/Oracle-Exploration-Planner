@@ -41,17 +41,70 @@ def scan_beam_count(params: LaserScanParams) -> int:
     return int(math.floor((params.angle_max - params.angle_min) / params.angle_increment)) + 1
 
 
+def _read_json_scan_metadata(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _real_scan_source_from_metadata(data: dict[str, Any]) -> tuple[str, str, bool]:
+    quality = str(data.get("scan_quality") or "")
+    backend = str(data.get("backend") or data.get("lidar_backend") or "")
+    if data.get("is_depth_derived") is True:
+        return "depth_pointcloud_derived", "debug_only_not_final_robot_lidar", True
+    if quality:
+        if backend == "usd_raycast":
+            return "usd_raycast_laserscan_2d", quality, False
+        if backend.startswith("isaac_"):
+            return "isaac_laserscan_2d", quality, False
+        source = str(data.get("scan_source") or "laserscan_2d")
+        return source, quality, bool(source.startswith("depth_") or quality == "debug_only_not_final_robot_lidar")
+    if data.get("is_real_lidar") is True:
+        if backend == "usd_raycast":
+            return "usd_raycast_laserscan_2d", "geometry_raycast_fallback_not_rtx_lidar", False
+        if backend.startswith("isaac_"):
+            return "isaac_laserscan_2d", "real_isaac_lidar", False
+        return "laserscan_2d", "real_robot_or_sim_laserscan", False
+    return "laserscan_2d", "real_robot_or_sim_laserscan", False
+
+
+def _lidar_source_from_file(path: Path) -> tuple[str, str]:
+    if path.suffix != ".npz":
+        return "lidar_3d_projected", "projected_real_or_sim_3d_lidar"
+    try:
+        with np.load(path) as data:
+            metadata_json = data["metadata_json"] if "metadata_json" in data.files else None
+            metadata = json.loads(str(metadata_json.tolist() if hasattr(metadata_json, "tolist") else metadata_json)) if metadata_json is not None else {}
+    except Exception:
+        metadata = {}
+    backend = str(metadata.get("backend") or "")
+    if backend == "usd_raycast":
+        return "usd_raycast_lidar_3d_projected", "geometry_raycast_fallback_not_rtx_lidar"
+    if backend.startswith("isaac_"):
+        return "isaac_lidar_3d_projected", "real_isaac_lidar"
+    return "lidar_3d_projected", "projected_real_or_sim_3d_lidar"
+
+
 def select_scan_source(dataset: str | Path, *, allow_depth_derived_scan: bool = False) -> ScanSource:
     root = Path(dataset)
     scan_dir = root / "sensors" / "laserscan_2d"
     scan_files = sorted([*scan_dir.glob("*.json"), *scan_dir.glob("*.npy")]) if scan_dir.exists() else []
     if scan_files:
-        return ScanSource("laserscan_2d", "real_robot_or_sim_laserscan", False, scan_files)
+        first_json = next((path for path in scan_files if path.suffix == ".json"), None)
+        source, quality, depth_derived = (
+            _real_scan_source_from_metadata(_read_json_scan_metadata(first_json))
+            if first_json
+            else ("laserscan_2d", "real_robot_or_sim_laserscan", False)
+        )
+        return ScanSource(source, quality, depth_derived, scan_files)
 
     lidar_dir = root / "sensors" / "lidar_3d"
-    lidar_files = sorted(lidar_dir.glob("*.npy")) if lidar_dir.exists() else []
+    lidar_files = sorted([*lidar_dir.glob("*.npz"), *lidar_dir.glob("*.npy")]) if lidar_dir.exists() else []
     if lidar_files:
-        return ScanSource("lidar_3d_projected", "projected_real_or_sim_3d_lidar", False, lidar_files)
+        source, quality = _lidar_source_from_file(lidar_files[0])
+        return ScanSource(source, quality, False, lidar_files)
 
     if allow_depth_derived_scan:
         depth_dir = root / "sensors" / "depth"
@@ -146,7 +199,7 @@ def load_scan_for_frame(
 ) -> dict[str, Any]:
     root = Path(dataset)
     stem = _frame_stem(frame, frame_idx)
-    if source.source == "laserscan_2d":
+    if source.source in {"laserscan_2d", "isaac_laserscan_2d", "usd_raycast_laserscan_2d"}:
         json_path = root / "sensors" / "laserscan_2d" / f"{stem}.json"
         npy_path = root / "sensors" / "laserscan_2d" / f"{stem}.npy"
         if json_path.exists():
@@ -155,12 +208,18 @@ def load_scan_for_frame(
             return _scan_from_npy(npy_path, params)
         raise FileNotFoundError(f"LaserScan file missing for frame {stem}")
 
-    if source.source == "lidar_3d_projected":
+    if source.source in {"lidar_3d_projected", "isaac_lidar_3d_projected", "usd_raycast_lidar_3d_projected"}:
+        lidar_npz_path = root / "sensors" / "lidar_3d" / f"{stem}.npz"
         lidar_path = root / "sensors" / "lidar_3d" / f"{stem}.npy"
-        if not lidar_path.exists():
-            raise FileNotFoundError(f"3D LiDAR file missing for frame {stem}: {lidar_path}")
+        if lidar_npz_path.exists():
+            with np.load(lidar_npz_path) as data:
+                points = np.asarray(data["points_xyz"], dtype=np.float32)
+        elif lidar_path.exists():
+            points = np.load(lidar_path)
+        else:
+            raise FileNotFoundError(f"3D LiDAR file missing for frame {stem}: {lidar_npz_path} or {lidar_path}")
         return pointcloud_to_laserscan(
-            np.load(lidar_path),
+            points,
             angle_min=params.angle_min,
             angle_max=params.angle_max,
             angle_increment=params.angle_increment,

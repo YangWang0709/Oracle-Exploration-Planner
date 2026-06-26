@@ -80,6 +80,62 @@ python scripts/qa_manual_route.py \
 
 Do not run RGB-D, multisensor, ROS2, rosbag, or SLAM commands until `manual_dense_trajectory.jsonl` exists and this QA passes. Do not fabricate route points.
 
+## Real Isaac LiDAR / LaserScan SLAM
+
+After the manual trajectory passes QA, strict SLAM should use a real
+Isaac LiDAR/LaserScan dataset, not the old depth-derived debug `/scan`.
+Use `env_isaaclab` for Isaac collection and `/usr/bin/python3` in a sourced
+ROS2 Humble shell for rosbag and `slam_toolbox`.
+
+First check available backends:
+
+```bash
+OUT_ROOT="outputs/exploration_dataset/seed_201_final_usd_test"
+
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/check_isaac_lidar_capabilities.py \
+  --out "$OUT_ROOT/isaac_lidar_capabilities"
+```
+
+Then run the smoke collection with `scripts/replay_manual_route_collect_multisensor_isaac.py`
+and the manual trajectory:
+
+```bash
+/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python scripts/replay_manual_route_collect_multisensor_isaac.py \
+  --scene-id "seed_201_final_manual_real_lidar_smoke" \
+  --scene-usd "/home/ubuntu22/infinigen/outputs/production_final_seed201_timing/seed_201/usd/export_scene.blend/export_scene.usdc" \
+  --trajectory "$OUT_ROOT/manual_trajectory/manual_dense_trajectory.jsonl" \
+  --out "$OUT_ROOT/manual_route_multisensor_real_lidar_smoke" \
+  --robot none \
+  --allow-xform-fallback-robot \
+  --enable-rgb \
+  --enable-depth \
+  --enable-depth-pointcloud \
+  --enable-real-lidar \
+  --enable-real-2d-laserscan \
+  --lidar-backend auto \
+  --lidar-frame-id laser \
+  --lidar-height-m 0.25 \
+  --headless \
+  --max-frames 10 \
+  --require-real-lidar
+```
+
+Validate it before full collection:
+
+```bash
+python scripts/qa_real_lidar_dataset.py \
+  --dataset "$OUT_ROOT/manual_route_multisensor_real_lidar_smoke" \
+  --expected-frames 10 \
+  --require-real-lidar \
+  --expect-laserscan
+```
+
+Strict rosbag and SLAM then use `--require-real-scan`; do not pass
+`--allow-depth-derived-scan` except for explicitly marked debug plumbing.
+Limitations remain: odometry is manual trajectory ground truth, the `laser`
+frame is mounted on fallback `base_link` when `--robot none` is used, and scan
+quality depends on the Isaac backend reported by the capability check.
+
 ## Seed 201 Commands
 
 Render the semantic floorplan:

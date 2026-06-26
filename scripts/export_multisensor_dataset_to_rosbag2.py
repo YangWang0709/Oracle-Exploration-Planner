@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--topic-tf-static", default="/tf_static")
     parser.add_argument("--topic-clock", default="/clock")
     parser.add_argument("--require-scan", action="store_true")
+    parser.add_argument("--require-real-scan", action="store_true")
     parser.add_argument("--allow-depth-derived-scan", action="store_true")
     parser.add_argument("--write-rgb", action="store_true")
     parser.add_argument("--write-depth", action="store_true")
@@ -79,6 +80,7 @@ def main() -> None:
             topic_tf_static=args.topic_tf_static,
             topic_clock=args.topic_clock,
             require_scan=bool(args.require_scan),
+            require_real_scan=bool(args.require_real_scan),
             allow_depth_derived_scan=bool(args.allow_depth_derived_scan),
             write_rgb=bool(args.write_rgb),
             write_depth=bool(args.write_depth),

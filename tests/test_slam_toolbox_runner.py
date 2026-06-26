@@ -117,6 +117,23 @@ def test_slam_preflight_fails_zero_required_topic_count(tmp_path: Path, monkeypa
     assert "required_topic_counts_zero" in metadata["failure_reason"]
 
 
+def test_slam_play_uses_synthetic_clock_without_recorded_clock(tmp_path: Path, monkeypatch) -> None:
+    import scripts.run_slam_from_manual_route_ros2 as runner
+
+    bag = tmp_path / "ros2" / "rosbag2" / "bag"
+    _write_bag_metadata(bag)
+    monkeypatch.setattr(runner, "_ros_pkg_available", lambda package: True)
+
+    metadata = build_slam_metadata(Args(tmp_path / "ros2", bag, tmp_path / "slam"))
+
+    command = metadata["commands"]["bag_play"].split()
+    played_topics = command[command.index("--topics") + 1 : command.index("--clock")]
+    assert "/clock" in metadata["topics_required"]
+    assert metadata["topics_played"] == ["/tf", "/tf_static", "/odom", "/scan"]
+    assert "--clock" in command
+    assert "/clock" not in played_topics
+
+
 def test_slam_params_same_file_does_not_raise(tmp_path: Path, monkeypatch) -> None:
     bag = tmp_path / "ros2" / "rosbag2" / "bag"
     out = tmp_path / "slam"

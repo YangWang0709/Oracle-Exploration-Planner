@@ -799,6 +799,20 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
                 f"black_frames={rgb_black_frames}, too_dark_frames={rgb_too_dark_frames}, "
                 f"min_rgb_mean_brightness={args.min_rgb_mean_brightness}"
             )
+        post_callback = getattr(args, "post_rgbd_callback", None)
+        if callable(post_callback):
+            callback_result = post_callback(
+                {
+                    "camera": camera,
+                    "manifest_rows": manifest_rows,
+                    "robot": robot,
+                    "robot_prim_path": robot_prim_path,
+                    "scene_usd": scene_path.as_posix(),
+                    "world": world,
+                }
+            )
+            if isinstance(callback_result, dict):
+                metadata = callback_result
         return metadata
     except Exception as exc:
         write_json(
@@ -813,7 +827,8 @@ def run_isaac_collection(args: argparse.Namespace) -> dict[str, Any]:
         )
         raise
     finally:
-        simulation_app.close()
+        if getattr(args, "close_simulation_app", True):
+            simulation_app.close()
 
 
 def main() -> None:

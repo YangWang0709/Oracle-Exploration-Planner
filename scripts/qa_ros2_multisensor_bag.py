@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expect-scan", action="store_true")
     parser.add_argument("--expect-tf", action="store_true")
     parser.add_argument("--expect-odom", action="store_true")
+    parser.add_argument("--require-real-scan", action="store_true")
     return parser.parse_args()
 
 
@@ -45,6 +46,7 @@ def run_qa(
     expect_scan: bool = False,
     expect_tf: bool = False,
     expect_odom: bool = False,
+    require_real_scan: bool = False,
 ) -> dict[str, Any]:
     bag_path = Path(bag)
     failures: list[str] = []
@@ -93,6 +95,15 @@ def run_qa(
             failures.append(f"metadata uses_manual_yaw is not true: {export_metadata.get('uses_manual_yaw')!r}")
         if export_metadata.get("depth_derived_scan") is True:
             warnings.append("scan source is depth-derived debug-only, not final robot LiDAR")
+        if require_real_scan:
+            scan_source = export_metadata.get("scan_source")
+            scan_quality = export_metadata.get("scan_quality")
+            if export_metadata.get("depth_derived_scan") is True:
+                failures.append("real scan required but metadata depth_derived_scan is true")
+            if scan_quality == "debug_only_not_final_robot_lidar":
+                failures.append("real scan required but metadata scan_quality is debug-only")
+            if not scan_source or str(scan_source).startswith("depth_"):
+                failures.append(f"real scan required but scan_source is {scan_source!r}")
     else:
         failures.append(f"ROS2 export metadata.json does not exist: {export_metadata_path}")
     summary = {
@@ -103,7 +114,9 @@ def run_qa(
         "metadata": metadata_path.as_posix(),
         "passed": not failures,
         "route_source": export_metadata.get("route_source"),
+        "scan_quality": export_metadata.get("scan_quality"),
         "scan_source": export_metadata.get("scan_source"),
+        "depth_derived_scan": export_metadata.get("depth_derived_scan"),
         "topics": metadata.get("topics", []),
         "warnings": warnings,
     }
@@ -120,6 +133,7 @@ def main() -> None:
         expect_scan=args.expect_scan,
         expect_tf=args.expect_tf,
         expect_odom=args.expect_odom,
+        require_real_scan=args.require_real_scan,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     raise SystemExit(0 if summary["passed"] else 1)

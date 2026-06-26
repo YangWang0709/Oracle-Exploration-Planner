@@ -32,6 +32,14 @@ rosbag2 with `/clock`, `/tf`, `/tf_static`, `/odom`, and `/scan`, run
 exporter refuses to fake a scan source; depth-derived scan requires an explicit
 debug-only flag and is not final robot LiDAR.
 
+Real Isaac LiDAR/LaserScan collection is now the strict SLAM path. Run
+`scripts/check_isaac_lidar_capabilities.py` with `env_isaaclab` first, then
+collect with `--enable-real-lidar --enable-real-2d-laserscan
+--require-real-lidar`. Strict rosbag export uses `--require-scan
+--require-real-scan` and rejects depth-derived debug scans. If RTX LiDAR,
+RangeSensor, PhysX scene-query, or the explicit USD geometry raycast fallback
+is unavailable, collection must fail rather than inventing `/scan`.
+
 Sensor smoke-test QA is implemented in `scripts/qa_sensor_smoke_test.py`.
 
 Manual route annotation is implemented with `scripts/render_manual_annotation_semantic_floorplan.py`, `scripts/render_manual_annotation_photoreal_topdown_isaac.py`, `scripts/render_manual_annotation_obstacle_base.py`, `scripts/manual_route_annotator.py`, `scripts/build_manual_trajectory.py`, and `scripts/qa_manual_route.py`. Manual routes are pose routes: every waypoint records adjusted USD world `x`, `y`, and user-annotated `yaw`. Semantic floorplans are best for furniture/category readability; the current recommended photoreal base is `photoreal_topdown_annotatable_obstacles.png`, which overlays planning obstacles on the real topdown render without changing the clean image transform. Geometry footprints are debug-only. The previous automatic path-overlay review has been deprecated because the dense overlay was too cluttered for user route review.
