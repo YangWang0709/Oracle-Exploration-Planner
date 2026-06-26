@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--random-seed", type=int, default=None)
     parser.add_argument("--min-start-clearance-m", type=float, default=0.30)
     parser.add_argument("--require-aligned-metadata", action="store_true")
+    parser.add_argument("--fresh", action="store_true", help="Start a new empty route and back up any existing --out directory first.")
     return parser.parse_args()
 
 
@@ -82,6 +84,61 @@ def _initial_start(args: argparse.Namespace, metadata: dict[str, Any], map_bundl
         "start_pose_source": sample["start_pose_source"],
         "start_pose_world": sample["start_pose_world"],
     }
+
+
+def _timestamp_for_backup() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _unique_backup_path(out_dir: Path, timestamp: str | None = None) -> Path:
+    stamp = timestamp or _timestamp_for_backup()
+    base = out_dir.with_name(f"{out_dir.name}_backup_{stamp}")
+    candidate = base
+    suffix = 1
+    while candidate.exists():
+        candidate = base.with_name(f"{base.name}_{suffix:02d}")
+        suffix += 1
+    return candidate
+
+
+def prepare_fresh_annotation_output(out_dir: str | Path, *, timestamp: str | None = None) -> Path | None:
+    """Back up an existing route output directory and recreate it empty."""
+
+    out = Path(out_dir)
+    if not out.exists():
+        out.mkdir(parents=True, exist_ok=True)
+        return None
+    if not any(out.iterdir()):
+        return None
+    backup = _unique_backup_path(out, timestamp=timestamp)
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(out.as_posix(), backup.as_posix())
+    out.mkdir(parents=True, exist_ok=True)
+    return backup
+
+
+def maybe_load_existing_annotation(out_dir: str | Path, state: dict[str, Any]) -> dict[str, Any]:
+    out = Path(out_dir)
+    existing_world = out / "manual_waypoints_world.json"
+    existing_image = out / "manual_waypoints_image.json"
+    autosave_world = out / "autosave" / "manual_waypoints_world.autosave.json"
+    if existing_world.exists() and existing_image.exists():
+        try:
+            loaded = load_manual_route_annotation_state(out)
+            state["start_pose_world"] = loaded["start_pose_world"]
+            state["start_pose_source"] = loaded.get("start_pose_source", state["start_pose_source"])
+            state["random_seed"] = loaded.get("random_seed", state["random_seed"])
+            state["user_waypoints"] = loaded["user_waypoints"]
+            state["last_saved_time"] = "loaded existing route"
+            state["status"] = f"Loaded existing manual route from {existing_world.resolve()}"
+            return {"loaded": True, "status": state["status"], "source": "final_route"}
+        except Exception as exc:
+            state["status"] = f"Failed to load existing route: {type(exc).__name__}: {exc}"
+            return {"loaded": False, "status": state["status"], "source": "final_route_error"}
+    if autosave_world.exists():
+        state["status"] = "Autosave found. Press R to recover autosave, or continue new route."
+        return {"loaded": False, "status": f"{state['status']} {autosave_world.resolve()}", "source": "autosave"}
+    return {"loaded": False, "status": state.get("status"), "source": None}
 
 
 def main() -> None:
@@ -116,25 +173,14 @@ def main() -> None:
     }
     state.update(_initial_start(args, metadata, map_bundle))
     out_dir = Path(args.out)
-    existing_world = out_dir / "manual_waypoints_world.json"
-    existing_image = out_dir / "manual_waypoints_image.json"
-    autosave_world = out_dir / "autosave" / "manual_waypoints_world.autosave.json"
-    if existing_world.exists() and existing_image.exists():
-        try:
-            loaded = load_manual_route_annotation_state(out_dir)
-            state["start_pose_world"] = loaded["start_pose_world"]
-            state["start_pose_source"] = loaded.get("start_pose_source", state["start_pose_source"])
-            state["random_seed"] = loaded.get("random_seed", state["random_seed"])
-            state["user_waypoints"] = loaded["user_waypoints"]
-            state["last_saved_time"] = "loaded existing route"
-            state["status"] = f"Loaded existing manual route from {existing_world.resolve()}"
-            print(state["status"])
-        except Exception as exc:
-            state["status"] = f"Failed to load existing route: {type(exc).__name__}: {exc}"
-            print(state["status"])
-    elif autosave_world.exists():
-        state["status"] = "Autosave found. Press R to recover autosave, or continue new route."
-        print(f"{state['status']} {autosave_world.resolve()}")
+    if args.fresh:
+        backup_path = prepare_fresh_annotation_output(out_dir)
+        print("Fresh annotation mode enabled.")
+        print(f"Old route backed up to: {backup_path.resolve() if backup_path else 'none'}")
+    else:
+        load_result = maybe_load_existing_annotation(out_dir, state)
+        if load_result.get("status") and load_result.get("source"):
+            print(load_result["status"])
 
     fig, ax = plt.subplots(figsize=(10, 10))
     ax.imshow(image)

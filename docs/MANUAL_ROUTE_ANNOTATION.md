@@ -185,6 +185,18 @@ python scripts/manual_route_annotator.py \
   --require-aligned-metadata
 ```
 
+By default the annotator reloads an existing final route or autosave in `--out` so work is not lost. To intentionally start over, add `--fresh`; the old `manual_route` directory is backed up to `manual_route_backup_<timestamp>` before the empty route starts:
+
+```bash
+python scripts/manual_route_annotator.py \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
+  --require-aligned-metadata \
+  --fresh
+```
+
 Annotator controls:
 
 - Left click once: set the next waypoint position.

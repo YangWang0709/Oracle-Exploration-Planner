@@ -367,6 +367,8 @@ python scripts/manual_route_annotator.py \
   --require-aligned-metadata
 ```
 
+Use `--fresh` on that command when the user intentionally wants to re-annotate from an empty route. Fresh mode backs up the existing `manual_route` directory to `manual_route_backup_<timestamp>`; omitting it keeps the default data-loss protection that reloads existing route/autosave files.
+
 Build and QA the manual trajectory:
 
 ```bash
