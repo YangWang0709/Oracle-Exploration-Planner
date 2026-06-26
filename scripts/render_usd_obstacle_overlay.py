@@ -41,7 +41,10 @@ def _update_alignment_override(obstacle_map_dir: str | Path, photoreal_metadata:
     alignment = alignment_transform_for_metadata(photoreal, preset)
     meta.update(
         {
+            "alignment_transform_source": "axis_preset",
+            "axis_preset": alignment.get("axis_mapping_preset"),
             "camera_axes_world": alignment.get("camera_axes_world"),
+            "double_transform_applied": False,
             "image_axis_mapping": alignment.get("image_axis_mapping"),
             "photoreal_obstacle_alignment_axis_preset": alignment.get("axis_mapping_preset"),
             "photoreal_obstacle_alignment_axis_preset_description": alignment.get("axis_mapping_description"),

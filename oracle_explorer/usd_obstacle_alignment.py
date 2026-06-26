@@ -29,6 +29,8 @@ WORLD_IMAGE_CONVENTION = (
     "World coordinates use adjusted USD XY meters; +x maps right and +y maps up in the image."
 )
 INSPECTION_JUDGEMENTS = {"aligned", "misaligned", "uncertain", "inspect_only"}
+DEFAULT_ALIGNED_PHOTOREAL_AXIS_PRESET = "isaac_topdown_y_left_x_down"
+STALE_PHOTOREAL_METADATA_WARNING = "metadata_not_aligned_for_seed_201_photoreal_topdown"
 AXIS_MAPPING_PRESETS: dict[str, dict[str, Any]] = {
     "metadata": {
         "description": "Use the world/image transform already stored in the photoreal metadata.",
@@ -42,7 +44,7 @@ AXIS_MAPPING_PRESETS: dict[str, dict[str, Any]] = {
         "v_axis_world": [0.0, -1.0, 0.0],
     },
     "isaac_topdown_y_left_x_down": {
-        "camera_axes_world": {"forward": [0.0, 0.0, -1.0], "right": [0.0, -1.0, 0.0], "up": [-1.0, 0.0, 0.0]},
+        "camera_axes_world": {"forward": [0.0, 0.0, -1.0], "right": [0.0, -1.0, 0.0], "up": [1.0, 0.0, 0.0]},
         "description": "Observed Isaac topdown RGB orientation for seed 201: world -Y maps to image +u and world +X maps to image +v.",
         "u_axis_world": [0.0, -1.0, 0.0],
         "v_axis_world": [1.0, 0.0, 0.0],
@@ -218,6 +220,69 @@ def alignment_transform_for_metadata(photoreal_metadata: dict[str, Any], preset_
     }
 
 
+def is_aligned_photoreal_metadata(
+    photoreal_metadata: dict[str, Any],
+    *,
+    axis_preset: str = DEFAULT_ALIGNED_PHOTOREAL_AXIS_PRESET,
+) -> bool:
+    return (
+        photoreal_metadata.get("alignment_transform_source") == "axis_preset"
+        and photoreal_metadata.get("axis_preset") == axis_preset
+        and matrix_shape_ok(photoreal_metadata.get("world_to_image_transform"))
+        and matrix_shape_ok(photoreal_metadata.get("image_to_world_transform"))
+    )
+
+
+def photoreal_metadata_alignment_info(
+    photoreal_metadata: dict[str, Any],
+    *,
+    metadata_path: str | Path | None = None,
+    axis_preset: str = DEFAULT_ALIGNED_PHOTOREAL_AXIS_PRESET,
+) -> dict[str, Any]:
+    source = photoreal_metadata.get("alignment_transform_source")
+    preset = photoreal_metadata.get("axis_preset") or photoreal_metadata.get("image_axis_preset")
+    aligned = is_aligned_photoreal_metadata(photoreal_metadata, axis_preset=axis_preset)
+    return {
+        "aligned": bool(aligned),
+        "alignment_transform_source": source,
+        "axis_preset": preset,
+        "expected_axis_preset": axis_preset,
+        "metadata_path": Path(metadata_path).as_posix() if metadata_path else None,
+        "metadata_alignment_warning": None if aligned else STALE_PHOTOREAL_METADATA_WARNING,
+    }
+
+
+def create_aligned_photoreal_metadata(
+    photoreal_metadata: dict[str, Any],
+    *,
+    axis_preset: str = DEFAULT_ALIGNED_PHOTOREAL_AXIS_PRESET,
+) -> dict[str, Any]:
+    alignment = alignment_transform_for_metadata(photoreal_metadata, axis_preset)
+    aligned = dict(photoreal_metadata)
+    aligned["original_image_to_world_transform"] = photoreal_metadata.get("image_to_world_transform") or photoreal_metadata.get(
+        "image_to_world"
+    )
+    aligned["original_world_to_image_transform"] = photoreal_metadata.get("world_to_image_transform") or photoreal_metadata.get(
+        "world_to_image"
+    )
+    aligned["alignment_transform_source"] = "axis_preset"
+    aligned["axis_preset"] = axis_preset
+    aligned["axis_mapping_description"] = alignment.get("axis_mapping_description")
+    aligned["camera_axes_world"] = alignment.get("camera_axes_world")
+    aligned["double_transform_applied"] = False
+    aligned["image_axis_mapping"] = alignment.get("image_axis_mapping")
+    aligned["image_axis_preset"] = axis_preset
+    aligned["image_to_world"] = alignment["image_to_world_transform"]
+    aligned["image_to_world_transform"] = alignment["image_to_world_transform"]
+    if alignment.get("meters_per_pixel_x") is not None:
+        aligned["meters_per_pixel_x"] = alignment["meters_per_pixel_x"]
+    if alignment.get("meters_per_pixel_y") is not None:
+        aligned["meters_per_pixel_y"] = alignment["meters_per_pixel_y"]
+    aligned["world_to_image"] = alignment["world_to_image_transform"]
+    aligned["world_to_image_transform"] = alignment["world_to_image_transform"]
+    return aligned
+
+
 def apply_alignment_transform_override(
     photoreal_metadata: dict[str, Any],
     alignment: dict[str, Any] | None,
@@ -247,12 +312,21 @@ def apply_alignment_transform_override(
         metadata["meters_per_pixel_x"] = alignment["meters_per_pixel_x"]
     if alignment.get("meters_per_pixel_y") is not None:
         metadata["meters_per_pixel_y"] = alignment["meters_per_pixel_y"]
+    metadata["alignment_transform_source"] = metadata.get("alignment_transform_source") or "obstacle_map_meta_axis_preset"
+    metadata["axis_preset"] = alignment.get("axis_mapping_preset")
+    metadata["double_transform_applied"] = False
     metadata["obstacle_alignment_axis_mapping_preset"] = alignment.get("axis_mapping_preset")
     metadata["obstacle_alignment_transform_override"] = True
     return metadata
 
 
 def obstacle_alignment_metadata(photoreal_metadata: dict[str, Any], bundle_or_meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    if is_aligned_photoreal_metadata(photoreal_metadata):
+        metadata = dict(photoreal_metadata)
+        metadata["double_transform_applied"] = False
+        metadata["obstacle_alignment_axis_mapping_preset"] = metadata.get("axis_preset")
+        metadata["obstacle_alignment_transform_override"] = False
+        return metadata
     meta = (bundle_or_meta or {}).get("meta", bundle_or_meta or {})
     alignment = None
     if isinstance(meta, dict) and matrix_shape_ok(meta.get("photoreal_obstacle_alignment_world_to_image_transform")):
@@ -972,6 +1046,9 @@ def render_overlay_set(
             paths["photoreal_manual_trajectory_vs_obstacle_overlay"] = str(manual_diag["overlay_path"])
 
     summary = {
+        "alignment_transform_source": metadata_for_alignment.get("alignment_transform_source"),
+        "axis_preset": metadata_for_alignment.get("axis_preset") or metadata_for_alignment.get("obstacle_alignment_axis_mapping_preset"),
+        "double_transform_applied": bool(metadata_for_alignment.get("double_transform_applied")),
         "generated_at": utc_now_iso(),
         "image_shape": [int(v) for v in image_shape],
         "manual_trajectory_diagnostic": manual_diag,

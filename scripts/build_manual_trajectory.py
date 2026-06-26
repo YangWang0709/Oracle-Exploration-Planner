@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
         default="planning_obstacle",
     )
     parser.add_argument("--allow-planning-obstacle-collisions", action="store_true")
+    parser.add_argument("--require-route-metadata-aligned", action="store_true")
     parser.add_argument("--draw-planning-obstacles", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--draw-raw-obstacles", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--draw-debug-inflated-obstacles", action=argparse.BooleanOptionalAction, default=False)
@@ -231,6 +232,7 @@ def main() -> None:
             require_usd_obstacle_map=bool(args.require_usd_obstacle_map),
             collision_check_mode=args.collision_check_mode,
             allow_planning_obstacle_collisions=bool(args.allow_planning_obstacle_collisions),
+            require_route_metadata_aligned=bool(args.require_route_metadata_aligned),
             draw_planning_obstacles=bool(args.draw_planning_obstacles),
             draw_raw_obstacles=bool(args.draw_raw_obstacles),
             draw_debug_inflated_obstacles=bool(args.draw_debug_inflated_obstacles),

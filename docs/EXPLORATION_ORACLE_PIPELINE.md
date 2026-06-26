@@ -181,6 +181,7 @@ Manual annotation artifacts:
 - `manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_start.png`
 - `manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_bounds.png`
 - `manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json`
+- `manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json`
 - `manual_annotation_photoreal_topdown_v4/photoreal_topdown_camera_debug.json`
 - `manual_annotation_photoreal_topdown_v4/photoreal_topdown_render_report.json`
 - `manual_annotation_photoreal_topdown_v4/photoreal_topdown_qa.json`
@@ -355,14 +356,15 @@ The Isaac camera top-down render can still be unreliable or appear identical to 
 
 Open `manual_annotation_floorplan_v3/floorplan_clean.png` for annotation. Use `manual_annotation_floorplan_v3/floorplan_semantic_labeled.png` to inspect furniture labels, `manual_annotation_floorplan_v3/floorplan_with_bounds.png` to inspect bounds, and `manual_annotation_floorplan_v3/floorplan_with_start.png` to view the random start marker. Do not use `topdown_base.png`, `manual_annotation/full_scene_topdown_clean.png`, or `manual_annotation_geometry_v2/full_scene_geometry_clean.png` as the recommended entry point.
 
-Then let the user click route waypoints:
+For seed 201 photoreal topdown annotation, use `photoreal_topdown_metadata_aligned.json`. Do not use the original `photoreal_topdown_metadata.json` for manual route annotation. Let the user click route waypoints on the photoreal topdown image with the aligned metadata:
 
 ```bash
 python scripts/manual_route_annotator.py \
-  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_clean.png" \
-  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_metadata.json" \
+  --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
-  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
+  --require-aligned-metadata
 ```
 
 Build and QA the manual trajectory:
@@ -380,8 +382,9 @@ python scripts/build_manual_trajectory.py \
   --yaw-interpolation shortest \
   --prefer-usd-obstacle-map \
   --collision-check-mode planning_obstacle \
+  --require-route-metadata-aligned \
   --preview-base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
-  --preview-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --preview-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --preview-mode photoreal \
   --draw-heading-arrows \
   --draw-waypoint-labels \

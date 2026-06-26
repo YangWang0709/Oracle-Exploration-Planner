@@ -35,7 +35,8 @@ The renderer computes full visible-geometry bounds from the adjusted USD stage w
 - `photoreal_topdown_clean.png`: primary photoreal annotation image. It contains no route, no heading arrows, no waypoint overlay, and no start marker.
 - `photoreal_topdown_with_start.png`: same render with only the random start marker.
 - `photoreal_topdown_with_bounds.png`: final bounds, raw USD visible bounds, oracle map bounds, and corner world coordinates.
-- `photoreal_topdown_metadata.json`: manual annotator-compatible transforms, camera metadata, bounds metadata, random start pose, and brightness flags.
+- `photoreal_topdown_metadata.json`: original render metadata and camera provenance.
+- `photoreal_topdown_metadata_aligned.json`: manual annotator-compatible corrected transform for seed 201. It uses `axis_preset=isaac_topdown_y_left_x_down`.
 - `photoreal_topdown_camera_debug.json`: USD bounds and camera parameter debug report.
 - `photoreal_topdown_render_report.json`: render summary and RGB brightness statistics.
 
@@ -67,10 +68,13 @@ Each manual waypoint is a pose. Click once for the waypoint position, then click
 ```bash
 python scripts/manual_route_annotator.py \
   --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
-  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
-  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
+  --require-aligned-metadata
 ```
+
+For seed 201 photoreal topdown annotation, use `photoreal_topdown_metadata_aligned.json`. Do not use the original `photoreal_topdown_metadata.json` for manual route annotation.
 
 The annotator runs in hard autosave mode. Each route-changing operation writes `manual_route/autosave/`, every completed waypoint pose final-saves the route, and lowercase `q` final-saves before quitting when no pending waypoint is missing heading. Lowercase `s` or `Ctrl+S` remains available as a manual extra save, but you no longer need to rely on it. Uppercase `S` sets the current cursor as the start pose; it does not save. Uppercase `Q` force-quits and writes autosave, but does not final-save an incomplete pending point. After saving, verify:
 
@@ -90,7 +94,7 @@ python scripts/recover_manual_route_autosave.py \
 
 `manual_waypoints_world.json` must exist before building `manual_dense_trajectory.jsonl`. If the check fails, do not run replay; save again or inspect the output directory printed by the annotator.
 
-After annotation, build `manual_trajectory/manual_dense_trajectory.jsonl` with `--yaw-mode annotated --yaw-interpolation shortest` and replay RGB-D from that manual trajectory only. Pass `--preview-base-image manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png`, `--preview-metadata manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json`, and `--preview-mode photoreal` when building the trajectory. `manual_route_preview.png` shows the raw clicked waypoint poses; `manual_trajectory_preview_photoreal.png` shows the final A*/snap/dense trajectory over the same photoreal topdown image. Open `manual_trajectory/manual_trajectory_preview_photoreal.png` for route review. The automatic coverage trajectory is reference-only and must not be used as the data source after a user route has been annotated.
+After annotation, build `manual_trajectory/manual_dense_trajectory.jsonl` with `--yaw-mode annotated --yaw-interpolation shortest` and replay RGB-D from that manual trajectory only. Pass `--preview-base-image manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png`, `--preview-metadata manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json`, `--preview-mode photoreal`, and `--require-route-metadata-aligned` when building the trajectory. `manual_route_preview.png` shows the raw clicked waypoint poses; `manual_trajectory_preview_photoreal.png` shows the final A*/snap/dense trajectory over the same photoreal topdown image. Open `manual_trajectory/manual_trajectory_preview_photoreal.png` for route review. The automatic coverage trajectory is reference-only and must not be used as the data source after a user route has been annotated.
 
 ## Replay Rule
 
@@ -103,6 +107,7 @@ For multisensor datasets, use `scripts/replay_manual_route_collect_multisensor_i
 If the image appears incomplete, inspect:
 
 - `photoreal_topdown_metadata.json`
+- `photoreal_topdown_metadata_aligned.json`
 - `photoreal_topdown_camera_debug.json`
 - `photoreal_topdown_qa.json`
 

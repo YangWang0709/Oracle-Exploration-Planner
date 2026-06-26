@@ -50,13 +50,15 @@ Run:
 ```bash
 python scripts/annotate_manual_route_from_topdown.py \
   --image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_start.png" \
-  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --floorplan-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_metadata.json" \
   --bounds "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_floorplan_v3/floorplan_bounds_debug.json" \
   --output "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_trajectory/manual_route.json"
 ```
 
 This helper records human-clicked waypoints in `manual_route.json` and writes `manual_route_overlay.png` for review. It uses pixel-to-world transforms from the topdown metadata. If conversion is unavailable, QA fails and the route must not be used for Isaac replay.
+
+For seed 201 photoreal topdown annotation, use `photoreal_topdown_metadata_aligned.json`. Do not use the original `photoreal_topdown_metadata.json` for manual route annotation.
 
 Build the dense trajectory without automatic route planning:
 
@@ -145,6 +147,7 @@ Photoreal outputs:
 - `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_start.png`
 - `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_with_bounds.png`
 - `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json`
+- `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json`
 - `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_camera_debug.json`
 - `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_render_report.json`
 
@@ -176,9 +179,10 @@ Or run the same annotator on the photoreal topdown map:
 ```bash
 python scripts/manual_route_annotator.py \
   --base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
-  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/oracle_map_usd_blender" \
-  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route"
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_route" \
+  --require-aligned-metadata
 ```
 
 Annotator controls:
@@ -279,8 +283,9 @@ python scripts/build_manual_trajectory.py \
   --yaw-interpolation shortest \
   --prefer-usd-obstacle-map \
   --collision-check-mode planning_obstacle \
+  --require-route-metadata-aligned \
   --preview-base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
-  --preview-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --preview-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --preview-mode photoreal \
   --draw-heading-arrows \
   --draw-waypoint-labels \
@@ -396,7 +401,7 @@ See `docs/MULTISENSOR_AND_ROS2_SLAM.md` for LiDAR availability, ROS2 topic plann
 - `floorplan_object_summary.json`
 - `floorplan_unknown_objects.json`
 
-`photoreal_topdown_metadata.json` records the same start pose and affine transforms, plus:
+`photoreal_topdown_metadata_aligned.json` records the corrected seed 201 photoreal transform with `axis_preset=isaac_topdown_y_left_x_down`, where image `+u` is world `-Y` and image `+v` is world `+X`. The original `photoreal_topdown_metadata.json` is kept as render provenance and should not be used for manual route annotation.
 
 - `base_map_type=photoreal_topdown_orthographic`
 - `render_backend=isaac_replicator_topdown_camera`

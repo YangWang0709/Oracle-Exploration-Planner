@@ -10,10 +10,10 @@ Do not use this step to regenerate routes. The only route diagnostic here is a r
 
 - Adjusted USD: `/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc`
 - Photoreal topdown image: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png`
-- Photoreal metadata: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json`
+- Photoreal metadata for annotation/overlay: `outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json`
 - USD obstacle output: `outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1`
 
-The obstacle grid uses `photoreal_topdown_metadata.json` `final_world_bounds_xy` and reuses its `world_to_image_transform` for every overlay. It does not compute a separate image transform.
+The obstacle grid uses photoreal topdown `final_world_bounds_xy`. Overlay, inspector, manual annotation, and trajectory preview use `photoreal_topdown_metadata_aligned.json` for the same corrected image/world transform. For seed 201, do not use the original `photoreal_topdown_metadata.json` for manual route annotation.
 
 For the current seed 201 Isaac photoreal topdown render, the image axes are not the original `+X -> u, +Y -> up` metadata assumption. Obstacle overlays use the explicit `isaac_topdown_y_left_x_down` axis preset:
 
@@ -21,7 +21,7 @@ For the current seed 201 Isaac photoreal topdown render, the image axes are not 
 - image `+v` follows world `+X`
 - camera forward is recorded as world `-Z`
 
-This corrected mapping is written to `usd_obstacle_map_meta.json` as `photoreal_obstacle_alignment_world_to_image_transform` and is used by overlays, QA, and the interactive inspector.
+This corrected mapping is written to `photoreal_topdown_metadata_aligned.json` and to `usd_obstacle_map_meta.json` as `photoreal_obstacle_alignment_world_to_image_transform`. If aligned metadata is passed to overlay or inspector tools, they use it directly and do not apply the obstacle-map override a second time.
 
 ## Build
 
@@ -29,7 +29,7 @@ This corrected mapping is written to `usd_obstacle_map_meta.json` as `photoreal_
 /home/ubuntu22/infinigen/blender/blender -b --python scripts/build_usd_obstacle_map.py -- \
   --scene-id "seed_201_adjusted_usd_test" \
   --scene-usd "/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc" \
-  --photoreal-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --photoreal-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
   --resolution 0.05 \
   --robot-radius-m 0.25 \
@@ -86,10 +86,11 @@ To regenerate overlays without rebuilding USD geometry:
 python scripts/render_usd_obstacle_overlay.py \
   --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
   --photoreal-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
-  --photoreal-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
-  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1/overlays" \
-  --image-axis-preset isaac_topdown_y_left_x_down
+  --photoreal-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1/overlays_aligned"
 ```
+
+Do not pass `--image-axis-preset` when rendering overlays with `photoreal_topdown_metadata_aligned.json`; that avoids applying the corrected transform twice.
 
 Open this first:
 
@@ -113,7 +114,7 @@ Run:
 python scripts/inspect_usd_obstacle_alignment.py \
   --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
   --photoreal-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
-  --photoreal-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --photoreal-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --out "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1/alignment_inspection"
 ```
 
@@ -172,7 +173,7 @@ Run:
 python scripts/qa_usd_obstacle_map_alignment.py \
   --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1" \
   --photoreal-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
-  --photoreal-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json"
+  --photoreal-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json"
 ```
 
 QA writes `usd_obstacle_map_alignment_qa.json`. It checks required grids, metadata source fields, transform roundtrip, nonempty obstacle/free layers, object query JSON, overlay PNGs, static inspection images when present, and manual inspection counts when present.
@@ -192,7 +193,7 @@ Alignment is likely good when:
 
 If the overlay is misaligned, do not rerun or modify the manual trajectory yet. First inspect:
 
-- `world_to_image_transform` in `photoreal_topdown_metadata.json`
+- `world_to_image_transform` in `photoreal_topdown_metadata_aligned.json`
 - `final_world_bounds_xy` versus USD object bounds
 - `usd_obstacle_map_meta.json` `world_to_grid_transform`
 - object classification in `usd_obstacle_objects.json`
@@ -219,8 +220,9 @@ python scripts/build_manual_trajectory.py \
   --yaw-interpolation shortest \
   --prefer-usd-obstacle-map \
   --collision-check-mode planning_obstacle \
+  --require-route-metadata-aligned \
   --preview-base-image "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
-  --preview-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata.json" \
+  --preview-metadata "outputs/exploration_dataset/seed_201_adjusted_usd_test/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
   --preview-mode photoreal \
   --draw-heading-arrows \
   --draw-waypoint-labels \

@@ -179,17 +179,26 @@ def run_qa(
 
     if (root / "usd_obstacle_map_meta.json").exists():
         meta = read_json(root / "usd_obstacle_map_meta.json")
+    if metadata_path.exists():
+        photoreal_meta = read_json(metadata_path)
+
+    if meta:
         if meta.get("source_of_truth") != "usd":
             failures.append(f"metadata source_of_truth is not usd: {meta.get('source_of_truth')!r}")
         if meta.get("used_blend") is not False:
             failures.append(f"metadata used_blend is not false: {meta.get('used_blend')!r}")
         if meta.get("bounds_source") != "photoreal_topdown_metadata_final_bounds":
             failures.append(f"metadata bounds_source is not photoreal metadata final bounds: {meta.get('bounds_source')!r}")
-        if not _path_matches(meta.get("photoreal_metadata"), metadata_path):
+        aligned_source = photoreal_meta.get("aligned_metadata_source") if photoreal_meta else None
+        if not _path_matches(meta.get("photoreal_metadata"), metadata_path) and not (
+            aligned_source and _path_matches(meta.get("photoreal_metadata"), aligned_source)
+        ):
             failures.append("metadata photoreal_metadata does not match QA argument")
         if not matrix_shape_ok(meta.get("world_to_image_transform_from_photoreal")):
             failures.append("metadata missing world_to_image_transform_from_photoreal")
-        if not matrix_shape_ok(meta.get("photoreal_obstacle_alignment_world_to_image_transform")):
+        if not matrix_shape_ok(meta.get("photoreal_obstacle_alignment_world_to_image_transform")) and not photoreal_meta.get(
+            "alignment_transform_source"
+        ):
             warnings.append("metadata missing photoreal_obstacle_alignment_world_to_image_transform; using raw photoreal transform")
         if not matrix_shape_ok(meta.get("world_to_grid_transform")):
             failures.append("metadata missing world_to_grid_transform")
@@ -199,10 +208,6 @@ def run_qa(
             failures.append(
                 f"metadata inflated_obstacle_grid_semantics is not planning_obstacle_grid: {meta.get('inflated_obstacle_grid_semantics')!r}"
             )
-
-    if metadata_path.exists():
-        photoreal_meta = read_json(metadata_path)
-
     try:
         bundle = load_obstacle_bundle(root)
         obstacle = bundle["obstacle_grid"]
@@ -279,6 +284,8 @@ def run_qa(
         "photoreal_obstacle_alignment_axis_preset": meta.get("photoreal_obstacle_alignment_axis_preset"),
         "planning_inflation_radius_m": meta.get("planning_inflation_radius_m"),
         "debug_inflation_radius_m": meta.get("debug_inflation_radius_m"),
+        "double_transform_applied": bool((photoreal_meta or {}).get("double_transform_applied")),
+        "photoreal_metadata_axis_preset": (photoreal_meta or {}).get("axis_preset"),
         "uses_obstacle_alignment_transform": bool(matrix_shape_ok(meta.get("photoreal_obstacle_alignment_world_to_image_transform"))),
         "warnings": warnings,
     }

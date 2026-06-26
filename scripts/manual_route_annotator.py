@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -25,12 +24,14 @@ from oracle_explorer.manual_route import (
     load_map_bundle,
     normalize_yaw,
     recover_manual_route_from_autosave,
+    requires_aligned_photoreal_metadata,
     save_manual_route_autosave,
     save_manual_route_annotation,
     world_to_image_uv,
     yaw_from_image_heading,
     yaw_to_deg,
 )
+from oracle_explorer.usd_obstacle_alignment import is_aligned_photoreal_metadata
 from oracle_explorer.start_sampling import sample_random_start_pose
 
 
@@ -50,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start", nargs=3, type=float, metavar=("X", "Y", "YAW"), default=None)
     parser.add_argument("--random-seed", type=int, default=None)
     parser.add_argument("--min-start-clearance-m", type=float, default=0.30)
+    parser.add_argument("--require-aligned-metadata", action="store_true")
     return parser.parse_args()
 
 
@@ -89,6 +91,14 @@ def main() -> None:
     metadata = read_json(metadata_path)
     map_bundle = load_map_bundle(args.map_dir)
     image = Image.open(base_image).convert("RGB")
+    needs_aligned = requires_aligned_photoreal_metadata(base_image, metadata)
+    aligned = is_aligned_photoreal_metadata(metadata)
+    if needs_aligned and not aligned:
+        message = "WARNING: photoreal topdown metadata is not aligned. Use photoreal_topdown_metadata_aligned.json for seed_201."
+        print(message, file=sys.stderr)
+        if args.require_aligned_metadata:
+            raise SystemExit(message)
+    import matplotlib.pyplot as plt
 
     state: dict[str, Any] = {
         "last_cursor": None,
