@@ -182,6 +182,93 @@ python scripts/qa_annotation_obstacle_base.py \
   --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1"
 ```
 
+## Doorway / Traversable Overrides
+
+Use a manual traversable override only when an open doorway or opening is visibly passable in the photoreal topdown/USD scene but `planning_obstacle_grid.npy` blocks it. Do not use it for real walls, closed door panels, furniture, counters, shelves, or large areas. The override does not modify the USD scene; it only clears selected cells from the planning obstacle map. `raw_obstacle_grid.npy` remains unchanged as a diagnostic layer, and raw cells cleared by override are reported as warnings.
+
+Recommended seed 201 command sequence:
+
+```bash
+cd "/home/ubuntu22/Oracle Exploration Planner"
+OUT_ROOT="outputs/exploration_dataset/seed_201_final_usd_test"
+
+python scripts/edit_traversable_overrides.py \
+  --base-image "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png" \
+  --photoreal-metadata "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1" \
+  --out "$OUT_ROOT/manual_traversable_overrides" \
+  --brush-radius-m 0.20
+
+python scripts/apply_traversable_overrides.py \
+  --obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1" \
+  --override-dir "$OUT_ROOT/manual_traversable_overrides" \
+  --out "$OUT_ROOT/usd_obstacle_map_v1_with_doorway_overrides"
+
+python scripts/qa_traversable_overrides.py \
+  --source-obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1" \
+  --override-dir "$OUT_ROOT/manual_traversable_overrides" \
+  --overridden-obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1_with_doorway_overrides" \
+  --photoreal-metadata "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json"
+
+python scripts/render_usd_obstacle_overlay.py \
+  --obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1_with_doorway_overrides" \
+  --photoreal-image "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --photoreal-metadata "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --out "$OUT_ROOT/usd_obstacle_map_v1_with_doorway_overrides/overlays"
+
+python scripts/render_manual_annotation_obstacle_base.py \
+  --photoreal-image "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --photoreal-metadata "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1_with_doorway_overrides" \
+  --out "$OUT_ROOT/manual_annotation_photoreal_topdown_v4_with_doorway_overrides" \
+  --planning-alpha 0.30 \
+  --show-raw-outline
+```
+
+Then annotate and build with the override map:
+
+```bash
+python scripts/manual_route_annotator.py \
+  --base-image "$OUT_ROOT/manual_annotation_photoreal_topdown_v4_with_doorway_overrides/photoreal_topdown_annotatable_obstacles.png" \
+  --metadata "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --map-dir "$OUT_ROOT/oracle_map_usd_blender" \
+  --out "$OUT_ROOT/manual_route" \
+  --require-aligned-metadata \
+  --fresh \
+  --obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1_with_doorway_overrides" \
+  --warn-if-click-planning-obstacle \
+  --debug-heading
+
+python scripts/build_manual_trajectory.py \
+  --manual-waypoints "$OUT_ROOT/manual_route/manual_waypoints_world.json" \
+  --map-dir "$OUT_ROOT/oracle_map_usd_blender" \
+  --usd-obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1_with_doorway_overrides" \
+  --out "$OUT_ROOT/manual_trajectory" \
+  --step-size 0.25 \
+  --snap-to-traversable \
+  --connect-with-astar \
+  --yaw-mode annotated \
+  --yaw-interpolation shortest \
+  --prefer-usd-obstacle-map \
+  --collision-check-mode planning_obstacle \
+  --require-route-metadata-aligned \
+  --manual-follow-mode polyline_first \
+  --direct-segment-first \
+  --preserve-manual-waypoints \
+  --max-deviation-from-manual-m 0.75 \
+  --max-snap-distance-m 0.30 \
+  --astar-corridor-width-m 1.00 \
+  --fail-if-deviation-exceeds \
+  --preview-base-image "$OUT_ROOT/manual_annotation_photoreal_topdown_v4_with_doorway_overrides/photoreal_topdown_annotatable_obstacles.png" \
+  --preview-metadata "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --preview-mode photoreal \
+  --draw-heading-arrows \
+  --draw-waypoint-labels \
+  --draw-planning-obstacles
+```
+
+The manual route metadata records `obstacle_map_has_traversable_overrides`, `obstacle_map_override_metadata_path`, and `override_cells_count`. Manual trajectory stats record `used_traversable_overrides`, `traversable_override_cells_count`, `traversable_override_metadata_path`, and how many trajectory points pass through cells that were original planning obstacles but manually cleared.
+
 Open the obstacle-aware photoreal PNG for realistic route annotation:
 
 ```bash

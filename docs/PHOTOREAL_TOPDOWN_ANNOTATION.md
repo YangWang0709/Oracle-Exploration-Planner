@@ -65,6 +65,43 @@ python scripts/qa_annotation_obstacle_base.py \
   --obstacle-map-dir "outputs/exploration_dataset/seed_201_adjusted_usd_test/usd_obstacle_map_v1"
 ```
 
+## Doorway / Traversable Overrides
+
+If the red planning obstacle overlay closes a visibly open doorway, use a manual traversable override. This creates a small grid mask from clicks on the photoreal obstacle image, applies it only to `planning_obstacle_grid.npy`, and leaves raw obstacles unchanged for QA. Do not use this for closed doors, furniture, walls, or broad areas.
+
+```bash
+cd "/home/ubuntu22/Oracle Exploration Planner"
+OUT_ROOT="outputs/exploration_dataset/seed_201_final_usd_test"
+
+python scripts/edit_traversable_overrides.py \
+  --base-image "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_annotatable_obstacles.png" \
+  --photoreal-metadata "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1" \
+  --out "$OUT_ROOT/manual_traversable_overrides" \
+  --brush-radius-m 0.20
+
+python scripts/apply_traversable_overrides.py \
+  --obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1" \
+  --override-dir "$OUT_ROOT/manual_traversable_overrides" \
+  --out "$OUT_ROOT/usd_obstacle_map_v1_with_doorway_overrides"
+
+python scripts/qa_traversable_overrides.py \
+  --source-obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1" \
+  --override-dir "$OUT_ROOT/manual_traversable_overrides" \
+  --overridden-obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1_with_doorway_overrides" \
+  --photoreal-metadata "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json"
+
+python scripts/render_manual_annotation_obstacle_base.py \
+  --photoreal-image "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_clean.png" \
+  --photoreal-metadata "$OUT_ROOT/manual_annotation_photoreal_topdown_v4/photoreal_topdown_metadata_aligned.json" \
+  --obstacle-map-dir "$OUT_ROOT/usd_obstacle_map_v1_with_doorway_overrides" \
+  --out "$OUT_ROOT/manual_annotation_photoreal_topdown_v4_with_doorway_overrides" \
+  --planning-alpha 0.30 \
+  --show-raw-outline
+```
+
+Use the new `manual_annotation_photoreal_topdown_v4_with_doorway_overrides/photoreal_topdown_annotatable_obstacles.png` for re-annotation, but keep passing the original aligned metadata. The generated metadata records that the obstacle map has traversable overrides.
+
 Open the obstacle-aware image for annotation:
 
 ```bash

@@ -158,6 +158,12 @@ def main() -> None:
         print(f"start_pose_world: {summary['start_pose_world']}")
         print(f"random_seed: {summary['random_seed']}")
         print(f"used_usd_obstacle_map: {summary.get('used_usd_obstacle_map')}")
+        print(f"used_traversable_overrides: {summary.get('used_traversable_overrides')}")
+        print(f"traversable_override_cells_count: {summary.get('traversable_override_cells_count')}")
+        print(
+            "points_inside_original_planning_obstacle_but_cleared_by_override: "
+            f"{summary.get('points_inside_original_planning_obstacle_but_cleared_by_override')}"
+        )
         print(f"collision_check_mode: {summary.get('collision_check_mode')}")
     print(f"pass/fail: {'pass' if summary['passed'] else 'fail'}")
     if summary.get("warnings"):

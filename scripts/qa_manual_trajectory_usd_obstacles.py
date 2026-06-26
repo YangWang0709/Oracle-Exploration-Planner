@@ -31,7 +31,15 @@ def main() -> None:
     print(f"manual_trajectory: {summary['manual_trajectory']}")
     print(f"used_usd_obstacle_map: {summary.get('stats_used_usd_obstacle_map')}")
     print(f"collision_check_mode: {summary.get('stats_collision_check_mode')}")
+    print(f"used_traversable_overrides: {summary.get('used_traversable_overrides') or summary.get('stats_used_traversable_overrides')}")
+    print(f"traversable_override_cells_count: {summary.get('traversable_override_cells_count')}")
     print(f"points_inside_raw_obstacle: {summary.get('points_inside_raw_obstacle')}")
+    print(f"points_inside_raw_obstacle_cleared_by_override: {summary.get('points_inside_raw_obstacle_cleared_by_override')}")
+    print(f"points_inside_raw_obstacle_not_overridden: {summary.get('points_inside_raw_obstacle_not_overridden')}")
+    print(
+        "points_inside_original_planning_obstacle_but_cleared_by_override: "
+        f"{summary.get('points_inside_original_planning_obstacle_but_cleared_by_override')}"
+    )
     print(f"points_inside_planning_obstacle: {summary.get('points_inside_planning_obstacle')}")
     print(f"points_inside_debug_inflated_obstacle: {summary.get('points_inside_debug_inflated_obstacle')}")
     print(f"segments_crossing_raw_obstacle: {summary.get('segments_crossing_raw_obstacle')}")

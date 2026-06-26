@@ -55,6 +55,9 @@ def run_qa(audit_dir: str | Path) -> dict[str, Any]:
         failures.append(f"dense_points_in_image_ratio is below 0.95: {report.get('dense_points_in_image_ratio')!r}")
     if report and int(report.get("points_inside_planning_obstacle") or 0) != 0:
         failures.append(f"points_inside_planning_obstacle is not zero: {report.get('points_inside_planning_obstacle')!r}")
+    raw_not_overridden = report.get("points_inside_raw_obstacle_not_overridden")
+    if report and raw_not_overridden is not None and int(raw_not_overridden or 0) != 0:
+        failures.append(f"points_inside_raw_obstacle_not_overridden is not zero: {raw_not_overridden!r}")
     if report and report.get("route_is_stale") is not False:
         failures.append(f"route_is_stale is not false: {report.get('route_is_stale')!r}")
     if report and diagnosis != "ok_projection_consistent":

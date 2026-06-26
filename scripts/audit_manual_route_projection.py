@@ -300,6 +300,8 @@ def _diagnosis(report: dict[str, Any], dense_deviation: dict[str, Any]) -> str:
         return "trajectory_deviates_from_manual_waypoints"
     if int(report.get("points_inside_planning_obstacle") or 0) > 0:
         return "trajectory_collides_with_planning_obstacle"
+    if int(report.get("points_inside_raw_obstacle_not_overridden") or 0) > 0:
+        return "trajectory_collides_with_non_overridden_raw_obstacle"
     return "ok_projection_consistent"
 
 
@@ -312,6 +314,9 @@ def _summary_markdown(report: dict[str, Any]) -> str:
         f"- max clicked vs reprojected error px: `{report.get('max_clicked_vs_reprojected_error_px')}`",
         f"- mean clicked vs reprojected error px: `{report.get('mean_clicked_vs_reprojected_error_px')}`",
         f"- dense points in image ratio: `{report.get('dense_points_in_image_ratio')}`",
+        f"- used traversable overrides: `{report.get('used_traversable_overrides')}`",
+        f"- traversable override cells: `{report.get('traversable_override_cells_count')}`",
+        f"- points through cleared override area: `{report.get('points_inside_original_planning_obstacle_but_cleared_by_override')}`",
         f"- points inside planning obstacle: `{report.get('points_inside_planning_obstacle')}`",
         "",
         "Open these first:",
@@ -375,8 +380,14 @@ def run_audit(
     usd_bundle = None
     obstacle_stats: dict[str, Any] = {
         "points_inside_debug_inflated_obstacle": None,
+        "points_inside_original_planning_obstacle_but_cleared_by_override": None,
         "points_inside_planning_obstacle": None,
         "points_inside_raw_obstacle": None,
+        "points_inside_raw_obstacle_cleared_by_override": None,
+        "points_inside_raw_obstacle_not_overridden": None,
+        "traversable_override_cells_count": 0,
+        "traversable_override_metadata_path": None,
+        "used_traversable_overrides": False,
     }
     if usd_obstacle_map_dir:
         usd_bundle = load_usd_obstacle_planning_map(usd_obstacle_map_dir)
@@ -424,8 +435,13 @@ def run_audit(
         "num_dense_trajectory_points": len(dense_rows),
         "num_manual_waypoints": len(world_doc.get("user_waypoints") or []),
         "points_inside_debug_inflated_obstacle": obstacle_stats.get("points_inside_debug_inflated_obstacle"),
+        "points_inside_original_planning_obstacle_but_cleared_by_override": obstacle_stats.get(
+            "points_inside_original_planning_obstacle_but_cleared_by_override"
+        ),
         "points_inside_planning_obstacle": obstacle_stats.get("points_inside_planning_obstacle"),
         "points_inside_raw_obstacle": obstacle_stats.get("points_inside_raw_obstacle"),
+        "points_inside_raw_obstacle_cleared_by_override": obstacle_stats.get("points_inside_raw_obstacle_cleared_by_override"),
+        "points_inside_raw_obstacle_not_overridden": obstacle_stats.get("points_inside_raw_obstacle_not_overridden"),
         "route_is_stale": _route_is_stale(route_meta, route_dir, metadata_path, metadata_sha),
         "route_metadata_alignment_transform_source": route_meta.get("metadata_alignment_transform_source")
         or route_meta.get("alignment_transform_source"),
@@ -434,6 +450,9 @@ def run_audit(
         "route_metadata_path_used": route_meta.get("metadata_path_used") or route_meta.get("metadata_path"),
         "segments_exceeding_deviation_limit": trajectory_stats.get("segments_exceeding_deviation_limit", []),
         "step_size": trajectory_stats.get("step_size"),
+        "traversable_override_cells_count": obstacle_stats.get("traversable_override_cells_count"),
+        "traversable_override_metadata_path": obstacle_stats.get("traversable_override_metadata_path"),
+        "used_traversable_overrides": obstacle_stats.get("used_traversable_overrides"),
         "waypoints_over_5px_error": roundtrip.get("waypoints_over_threshold", []),
     }
     report["diagnosis"] = _diagnosis(report, dense_deviation)

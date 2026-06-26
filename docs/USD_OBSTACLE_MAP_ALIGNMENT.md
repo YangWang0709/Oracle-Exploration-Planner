@@ -116,6 +116,23 @@ python scripts/render_usd_obstacle_overlay.py \
 
 Do not pass `--image-axis-preset` when rendering overlays with `photoreal_topdown_metadata_aligned.json`; that avoids applying the corrected transform twice.
 
+## Doorway / Traversable Overrides
+
+If an open doorway is visibly passable but `planning_obstacle_grid.npy` seals it, create a manual traversable override instead of relaxing snap/deviation limits. The override workflow keeps `photoreal_topdown_clean.png`, `photoreal_topdown_annotatable_obstacles.png`, and the override mask in the same aligned image/world frame. It clears only `planning_obstacle_grid.npy`; `raw_obstacle_grid.npy` is copied unchanged for diagnostics.
+
+The applied map is written to `usd_obstacle_map_v1_with_doorway_overrides/` and contains:
+
+- `raw_obstacle_grid.npy`, unchanged from the source map
+- `planning_obstacle_grid.npy`, with override cells cleared
+- `inflated_obstacle_grid.npy`, synchronized to the new planning grid
+- `debug_inflated_obstacle_grid.npy`, copied from source unless explicitly regenerated
+- `manual_traversable_override_mask.npy`
+- `obstacle_map_override_metadata.json`
+
+Run `scripts/qa_traversable_overrides.py` after apply. It checks the formula `new_planning = source_planning AND NOT override_mask`, verifies raw is unchanged, ensures the override covers less than 2% of the map by default, and warns if raw obstacle cells were cleared. A raw-cleared warning is acceptable only for a visually open doorway or opening; it is not acceptable for walls, furniture, closed door panels, or large regions.
+
+After QA, rerender both the obstacle overlay and `photoreal_topdown_annotatable_obstacles.png` using `--obstacle-map-dir .../usd_obstacle_map_v1_with_doorway_overrides`. Manual route annotation and trajectory build must then use the same override map directory so provenance stays consistent.
+
 Open this first:
 
 ```bash

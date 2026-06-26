@@ -10,6 +10,7 @@ from PIL import Image
 
 from .io_utils import ensure_dir, read_json, write_json
 from .manual_route import image_to_world_xy
+from .traversable_overrides import manual_traversable_override_info
 from .usd_obstacle_alignment import (
     DEFAULT_ALIGNED_PHOTOREAL_AXIS_PRESET,
     grid_in_bounds,
@@ -110,6 +111,7 @@ def render_manual_annotation_obstacle_base(
     base: Image.Image = projected["base_image"]
     metadata = projected["metadata"]
     projection_metadata = projected["metadata_for_projection"]
+    override_info = manual_traversable_override_info(obstacle_root)
     raw_mask = np.asarray(projected["raw_image_mask"], dtype=bool)
     planning_mask = np.asarray(projected["planning_image_mask"], dtype=bool)
     debug_mask = np.asarray(projected["debug_inflated_image_mask"], dtype=bool)
@@ -159,6 +161,7 @@ def render_manual_annotation_obstacle_base(
         "metadata_for_annotation": metadata_name,
         "metadata_path": metadata_path.as_posix(),
         "obstacle_map_dir": obstacle_root.as_posix(),
+        **override_info,
         "planning_alpha": float(planning_alpha),
         "planning_obstacle_grid_path": (obstacle_root / "planning_obstacle_grid.npy").as_posix(),
         "planning_obstacle_image_pixels": int(planning_mask.sum()),

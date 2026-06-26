@@ -10,6 +10,7 @@ import numpy as np
 
 from .grid import GridIndex, grid_to_world, in_bounds, load_grid, world_to_grid
 from .io_utils import read_json, read_jsonl, write_json
+from .traversable_overrides import RAW_CLEARED_WARNING, load_obstacle_map_override_artifacts
 
 
 COLLISION_CHECK_MODES = ("planning_obstacle", "raw_obstacle", "debug_inflated")
@@ -133,8 +134,14 @@ def load_usd_obstacle_planning_map(
             raise ValueError(f"planning free grid shape {planning_free.shape} does not match metadata shape {expected_shape}")
 
     warnings: list[str] = []
-    if not np.all(raw <= planning):
-        warnings.append("raw_obstacle_grid contains cells outside planning_obstacle_grid; raw will still be hard-checked.")
+    override_artifacts = load_obstacle_map_override_artifacts(root, expected_shape=expected_shape)
+    override_mask = override_artifacts.get("manual_traversable_override_mask")
+    raw_outside_planning = raw & ~planning
+    if raw_outside_planning.any():
+        if isinstance(override_mask, np.ndarray) and np.all(raw_outside_planning <= override_mask):
+            warnings.append(RAW_CLEARED_WARNING)
+        else:
+            warnings.append("raw_obstacle_grid contains cells outside planning_obstacle_grid; raw will still be hard-checked.")
     if not np.all(planning <= debug):
         warnings.append("planning_obstacle_grid contains cells outside debug_inflated_obstacle_grid.")
 
@@ -150,6 +157,7 @@ def load_usd_obstacle_planning_map(
         "planning_obstacle_grid_path": planning_path,
         "raw_obstacle_grid": raw,
         "raw_obstacle_grid_path": raw_path,
+        **override_artifacts,
         "warnings": warnings,
     }
 
@@ -261,9 +269,32 @@ def compute_trajectory_obstacle_stats(
     planning = np.asarray(usd_obstacle_bundle["planning_obstacle_grid"], dtype=bool)
     debug = np.asarray(usd_obstacle_bundle["debug_inflated_obstacle_grid"], dtype=bool)
     clearance = np.asarray(usd_obstacle_bundle["clearance_distance_m"], dtype=np.float32)
-    masks = {"raw": raw, "planning": planning, "debug": debug}
-    point_hits: dict[str, list[dict[str, Any]]] = {"raw": [], "planning": [], "debug": []}
-    segment_hits: dict[str, list[dict[str, Any]]] = {"raw": [], "planning": [], "debug": []}
+    override_mask = usd_obstacle_bundle.get("manual_traversable_override_mask")
+    used_overrides = bool(
+        usd_obstacle_bundle.get("used_traversable_overrides")
+        and isinstance(override_mask, np.ndarray)
+        and tuple(np.asarray(override_mask).shape) == tuple(planning.shape)
+    )
+    override = np.asarray(override_mask, dtype=bool) if used_overrides else np.zeros_like(planning, dtype=bool)
+    original_planning_value = usd_obstacle_bundle.get("original_planning_obstacle_grid")
+    if isinstance(original_planning_value, np.ndarray) and tuple(original_planning_value.shape) == tuple(planning.shape):
+        original_planning = np.asarray(original_planning_value, dtype=bool)
+    else:
+        original_planning = planning | override
+    raw_not_overridden = raw & ~override
+    raw_cleared_by_override = raw & override
+    original_planning_cleared_by_override = original_planning & override & ~planning
+    masks = {
+        "raw": raw,
+        "planning": planning,
+        "debug": debug,
+        "manual_override": override,
+        "original_planning_cleared_by_override": original_planning_cleared_by_override,
+        "raw_cleared_by_override": raw_cleared_by_override,
+        "raw_not_overridden": raw_not_overridden,
+    }
+    point_hits: dict[str, list[dict[str, Any]]] = {key: [] for key in masks}
+    segment_hits: dict[str, list[dict[str, Any]]] = {key: [] for key in masks}
     point_outside: list[dict[str, Any]] = []
     segment_outside: list[dict[str, Any]] = []
     clearance_values: list[float] = []
@@ -324,21 +355,51 @@ def compute_trajectory_obstacle_stats(
         "min_clearance_m": float(np.min(clearance_values)) if clearance_values else None,
         "planning_obstacle_collision_frame_indices": [hit["frame_idx"] for hit in point_hits["planning"][:max_samples]],
         "points_inside_debug_inflated_obstacle": int(len(point_hits["debug"])),
+        "points_inside_manual_traversable_override": int(len(point_hits["manual_override"])),
+        "points_inside_original_planning_obstacle_but_cleared_by_override": int(
+            len(point_hits["original_planning_cleared_by_override"])
+        ),
         "points_inside_planning_obstacle": int(len(point_hits["planning"])),
         "points_inside_raw_obstacle": int(len(point_hits["raw"])),
+        "points_inside_raw_obstacle_cleared_by_override": int(len(point_hits["raw_cleared_by_override"])),
+        "points_inside_raw_obstacle_not_overridden": int(len(point_hits["raw_not_overridden"])),
         "points_outside_obstacle_map_bounds": int(len(point_outside)),
         "raw_obstacle_collision_frame_indices": [hit["frame_idx"] for hit in point_hits["raw"][:max_samples]],
         "segment_count": max(0, len(xy_rows) - 1),
         "segments_crossing_debug_inflated_obstacle": int(len(segment_hits["debug"])),
+        "segments_crossing_manual_traversable_override": int(len(segment_hits["manual_override"])),
+        "segments_crossing_original_planning_obstacle_but_cleared_by_override": int(
+            len(segment_hits["original_planning_cleared_by_override"])
+        ),
         "segments_crossing_planning_obstacle": int(len(segment_hits["planning"])),
         "segments_crossing_raw_obstacle": int(len(segment_hits["raw"])),
+        "segments_crossing_raw_obstacle_cleared_by_override": int(len(segment_hits["raw_cleared_by_override"])),
+        "segments_crossing_raw_obstacle_not_overridden": int(len(segment_hits["raw_not_overridden"])),
         "segments_outside_obstacle_map_bounds": int(len(segment_outside)),
         "total_trajectory_points": int(len(dense_trajectory_records)),
+        "traversable_override_cells_count": int(usd_obstacle_bundle.get("traversable_override_cells_count") or 0),
+        "traversable_override_metadata_path": (
+            Path(usd_obstacle_bundle["obstacle_map_override_metadata_path"]).as_posix()
+            if usd_obstacle_bundle.get("obstacle_map_override_metadata_path")
+            else None
+        ),
+        "used_traversable_overrides": bool(used_overrides),
     }
     if point_outside:
         stats["first_point_outside_obstacle_map_bounds"] = point_outside[0]
     if segment_outside:
         stats["first_segment_outside_obstacle_map_bounds"] = segment_outside[0]
+    for stat_key, hit_key in (
+        ("first_original_planning_obstacle_cleared_by_override", "original_planning_cleared_by_override"),
+        ("first_raw_obstacle_cleared_by_override", "raw_cleared_by_override"),
+        ("first_raw_obstacle_not_overridden", "raw_not_overridden"),
+        ("first_segment_crossing_original_planning_obstacle_cleared_by_override", "original_planning_cleared_by_override"),
+        ("first_segment_crossing_raw_obstacle_cleared_by_override", "raw_cleared_by_override"),
+        ("first_segment_crossing_raw_obstacle_not_overridden", "raw_not_overridden"),
+    ):
+        hits = segment_hits[hit_key] if stat_key.startswith("first_segment") else point_hits[hit_key]
+        if hits:
+            stats[stat_key] = hits[0]
     return stats
 
 
@@ -397,12 +458,15 @@ def qa_manual_trajectory_against_usd_obstacles(
     obstacle_stats: dict[str, Any] = {}
     if rows and bundle is not None:
         obstacle_stats = compute_trajectory_obstacle_stats(rows, bundle)
-        if int(obstacle_stats["points_inside_raw_obstacle"]) > 0:
-            failures.append("trajectory points enter raw obstacle")
+        used_overrides = bool(obstacle_stats.get("used_traversable_overrides"))
+        raw_point_key = "points_inside_raw_obstacle_not_overridden" if used_overrides else "points_inside_raw_obstacle"
+        raw_segment_key = "segments_crossing_raw_obstacle_not_overridden" if used_overrides else "segments_crossing_raw_obstacle"
+        if int(obstacle_stats[raw_point_key]) > 0:
+            failures.append("trajectory points enter raw obstacle outside manual override")
         if int(obstacle_stats["points_inside_planning_obstacle"]) > 0:
             failures.append("trajectory points enter planning obstacle")
-        if int(obstacle_stats["segments_crossing_raw_obstacle"]) > 0:
-            failures.append("trajectory segments cross raw obstacle")
+        if int(obstacle_stats[raw_segment_key]) > 0:
+            failures.append("trajectory segments cross raw obstacle outside manual override")
         if int(obstacle_stats["segments_crossing_planning_obstacle"]) > 0:
             failures.append("trajectory segments cross planning obstacle")
         if int(obstacle_stats["points_outside_obstacle_map_bounds"]) > 0:
@@ -411,6 +475,12 @@ def qa_manual_trajectory_against_usd_obstacles(
             failures.append("trajectory segments leave USD obstacle map bounds")
         if int(obstacle_stats["points_inside_debug_inflated_obstacle"]) > 0:
             warnings.append("route enters conservative debug inflation but not planning obstacle.")
+        if int(obstacle_stats.get("points_inside_original_planning_obstacle_but_cleared_by_override") or 0) > 0:
+            warnings.append(
+                f"{obstacle_stats['points_inside_original_planning_obstacle_but_cleared_by_override']} trajectory points pass through manually cleared traversable override area."
+            )
+        if int(obstacle_stats.get("points_inside_raw_obstacle_cleared_by_override") or 0) > 0:
+            warnings.append("Trajectory passes through raw obstacle cells cleared by manual override; verify open doorway in USD.")
 
     summary = {
         **obstacle_stats,
@@ -420,6 +490,9 @@ def qa_manual_trajectory_against_usd_obstacles(
         "passed": not failures,
         "stats_used_usd_obstacle_map": stats.get("used_usd_obstacle_map"),
         "stats_collision_check_mode": stats.get("collision_check_mode"),
+        "stats_used_traversable_overrides": stats.get("used_traversable_overrides"),
+        "traversable_override_cells_count": obstacle_stats.get("traversable_override_cells_count"),
+        "traversable_override_metadata_path": obstacle_stats.get("traversable_override_metadata_path"),
         "usd_obstacle_map_dir": Path(usd_obstacle_map_dir).as_posix(),
         "warnings": warnings,
     }
