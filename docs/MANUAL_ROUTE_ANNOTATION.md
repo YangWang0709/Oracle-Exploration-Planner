@@ -8,6 +8,23 @@ The old automatic path overlay review has been deprecated. The 1000-point path m
 
 The automatic `trajectory_usd_blender` output can still be used as a reference trajectory, but it must not be used as the data source after the user has annotated a route. User-authored RGB-D replay must follow `manual_trajectory/manual_dense_trajectory.jsonl`.
 
+The semiautomatic batch runner now generates the obstacle-aware annotation
+base, writes the exact doorway-override and manual-route commands, and blocks
+at human review points when `--stop-at-human-review` is set:
+
+```bash
+python scripts/run_semiauto_oracle_pipeline.py \
+  --scene-root "/infinigen/outputs/final_40_scene_production" \
+  --out-root "outputs/exploration_dataset/final_40_scene_production" \
+  --scene-id "seed_201" \
+  --stage prepare_with_overrides \
+  --stop-at-human-review
+```
+
+Resume after annotation with the same command plus `--resume`. If the doorway
+review needs no override mask, add `--skip-doorway-override`. Full details are
+in `docs/SEMIAUTO_PIPELINE.md`.
+
 ## Source Of Truth
 
 - Adjusted USD: `/home/ubuntu22/infinigen/outputs/production_9950x3d_no_ceiling_no_exterior_smoke_seed201/seed_201/usd/export_scene.blend/export_scene.usdc`

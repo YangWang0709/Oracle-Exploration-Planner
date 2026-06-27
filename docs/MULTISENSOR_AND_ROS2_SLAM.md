@@ -8,6 +8,26 @@ All multisensor replay follows the user-authored manual trajectory:
 
 Do not use `trajectory_usd_blender/dense_trajectory.jsonl` as the data source for user-annotated sensor sampling. Metadata must retain `route_source=manual`, `route_is_user_annotated=true`, `pose_annotation_mode=position_plus_yaw`, and `uses_manual_yaw=true`.
 
+The semiautomatic runner wraps the validated manual route, RGB-D smoke,
+strict real-LiDAR collection, rosbag2 export, tuned `slam_toolbox`, and QA
+sequence:
+
+```bash
+python scripts/run_semiauto_oracle_pipeline.py \
+  --scene-root "/infinigen/outputs/final_40_scene_production" \
+  --out-root "outputs/exploration_dataset/final_40_scene_production" \
+  --scene-id "seed_201" \
+  --stage all \
+  --resume \
+  --stop-at-human-review
+```
+
+It uses `/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/python` for Isaac,
+`/usr/bin/python3` after `source /opt/ros/humble/setup.bash` for rosbag/SLAM,
+and formal rosbag export always includes `--require-scan --require-real-scan`.
+See `docs/SEMIAUTO_PIPELINE.md` for approval markers, diagnostics, and final
+reports.
+
 The route is created by human clicks on a topdown image. Do not restore automatic route generation, automatic route review, A*, RRT, PRM, frontier, or graph-search route planning for this workflow.
 
 ## Manual Topdown Route

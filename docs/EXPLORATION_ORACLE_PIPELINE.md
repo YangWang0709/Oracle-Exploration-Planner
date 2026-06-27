@@ -6,6 +6,34 @@ This project builds an oracle exploration planner for already-generated Infinige
 
 The current project is independent from `../infinigen`. Infinigen is a read-only source of generated scene files, metadata, and export conventions.
 
+## Semiautomatic Batch Runner
+
+The reusable entry point for the full Oracle, Isaac data collection, strict
+real-LiDAR rosbag, SLAM, and QA flow is:
+
+```bash
+python scripts/run_semiauto_oracle_pipeline.py \
+  --scene-root "/infinigen/outputs/final_40_scene_production" \
+  --out-root "outputs/exploration_dataset/final_40_scene_production" \
+  --scene-id "seed_201" \
+  --stage all \
+  --stop-at-human-review
+```
+
+For batch annotation prep:
+
+```bash
+python scripts/run_semiauto_oracle_pipeline.py \
+  --scene-root "/infinigen/outputs/final_40_scene_production" \
+  --out-root "outputs/exploration_dataset/final_40_scene_production" \
+  --scene-limit 5 \
+  --stage prepare_annotation \
+  --stop-at-human-review
+```
+
+See `docs/SEMIAUTO_PIPELINE.md` for stage groups, human-stop points, resume
+markers, final reports, large-file rules, and dataset budget estimates.
+
 ## Oracle Versus Learner
 
 The planner is an oracle: it may inspect the full known map before planning. A downstream learning agent must not receive that full map at inference time. The intended learner supervision is the oracle's path, action labels, next-waypoint hints, and RGB-D observations collected during replay.
