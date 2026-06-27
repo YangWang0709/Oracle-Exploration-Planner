@@ -4,6 +4,10 @@ This document describes the stage-based wrapper for the Oracle Exploration
 Planner, Isaac Sim data collection, strict real-LiDAR rosbag export, and
 `slam_toolbox` mapping workflow.
 
+For full execution commands, parameter explanations, human review steps,
+resume markers, troubleshooting, and final-output checklists, see
+`docs/SEMIAUTO_EXECUTION_GUIDE.md`.
+
 The default 40-scene input root is:
 
 ```bash

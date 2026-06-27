@@ -31,8 +31,9 @@ python scripts/run_semiauto_oracle_pipeline.py \
   --stop-at-human-review
 ```
 
-See `docs/SEMIAUTO_PIPELINE.md` for stage groups, human-stop points, resume
-markers, final reports, large-file rules, and dataset budget estimates.
+See `docs/SEMIAUTO_PIPELINE.md` for the short overview. For full execution
+commands and parameter explanations, see
+`docs/SEMIAUTO_EXECUTION_GUIDE.md`.
 
 ## Oracle Versus Learner
 
