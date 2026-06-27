@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from oracle_explorer.io_utils import read_json, write_json
+from oracle_explorer.io_utils import read_json
 from scripts import run_semiauto_oracle_pipeline as pipeline
 
 
@@ -61,6 +61,135 @@ def test_scene_discovery_prefers_export_usdc_and_finds_recursive_usd(tmp_path: P
     assert [scene.name for scene in scenes] == ["seed_001", "seed_002"]
     assert scenes[0].scene_usd == preferred
     assert scenes[1].scene_usd == nested.resolve()
+
+
+def test_scene_discovery_skips_incomplete_seed_without_failing(tmp_path: Path) -> None:
+    root = tmp_path / "scenes"
+    _write_scene(root, "seed_1")
+    (root / "seed_2" / "usd").mkdir(parents=True)
+
+    report = pipeline.build_scene_discovery_report(
+        scene_root_requested=root,
+        scene_root_resolved=root,
+    )
+    scenes = pipeline.select_discovered_scenes(report)
+
+    assert [scene.name for scene in scenes] == ["seed_1"]
+    assert report["num_valid_scenes"] == 1
+    assert report["num_incomplete_seed_dirs"] == 1
+    assert report["incomplete_seed_dirs"][0]["scene_name"] == "seed_2"
+    assert report["incomplete_seed_dirs"][0]["reason"] == "usd_dir_exists_but_no_usd_or_usdc"
+
+
+def test_scene_discovery_ignores_launcher_logs(tmp_path: Path) -> None:
+    root = tmp_path / "scenes"
+    _write_scene(root, "seed_1")
+    (root / "launcher_logs").mkdir(parents=True)
+    (root / "logs").mkdir(parents=True)
+    (root / "summary.csv").write_text("summary", encoding="utf-8")
+
+    report = pipeline.build_scene_discovery_report(
+        scene_root_requested=root,
+        scene_root_resolved=root,
+    )
+
+    assert report["num_seed_dirs"] == 1
+    assert report["ignored_entries"] == ["launcher_logs", "logs", "summary.csv"]
+
+
+def test_scene_limit_applies_after_valid_filtering(tmp_path: Path) -> None:
+    root = tmp_path / "scenes"
+    (root / "seed_1" / "usd").mkdir(parents=True)
+    selected = _write_scene(root, "seed_2").scene_usd
+
+    scenes = pipeline.discover_scenes(root, scene_limit=1)
+
+    assert [scene.name for scene in scenes] == ["seed_2"]
+    assert scenes[0].scene_usd == selected
+
+
+def test_scene_discovery_uses_natural_seed_sort(tmp_path: Path) -> None:
+    root = tmp_path / "scenes"
+    _write_scene(root, "seed_10")
+    _write_scene(root, "seed_2")
+
+    scenes = pipeline.discover_scenes(root)
+
+    assert [scene.name for scene in scenes] == ["seed_2", "seed_10"]
+
+
+def test_no_valid_scene_fails_with_diagnostics(tmp_path: Path) -> None:
+    root = tmp_path / "scenes"
+    (root / "seed_1" / "usd").mkdir(parents=True)
+    (root / "launcher_logs").mkdir(parents=True)
+
+    with pytest.raises(FileNotFoundError, match="No valid scene USD/USDC files found"):
+        pipeline.discover_scenes(root)
+
+
+def test_fail_on_incomplete_scenes_fails_strict_mode(tmp_path: Path) -> None:
+    root = tmp_path / "scenes"
+    _write_scene(root, "seed_1")
+    (root / "seed_2" / "usd").mkdir(parents=True)
+    report = pipeline.build_scene_discovery_report(
+        scene_root_requested=root,
+        scene_root_resolved=root,
+    )
+
+    with pytest.raises(pipeline.SceneDiscoveryError, match="Incomplete scene dirs"):
+        pipeline.select_discovered_scenes(report, fail_on_incomplete_scenes=True)
+
+
+def test_list_scenes_only_writes_report_and_does_not_run_stage(tmp_path: Path) -> None:
+    root = tmp_path / "scenes"
+    _write_scene(root, "seed_1")
+    out = tmp_path / "out"
+
+    rc = pipeline.main(
+        [
+            "--scene-root",
+            root.as_posix(),
+            "--out-root",
+            out.as_posix(),
+            "--list-scenes-only",
+        ]
+    )
+
+    assert rc == 0
+    report = read_json(out / "scene_discovery_report.json")
+    assert report["num_valid_scenes"] == 1
+    assert report["selected_scenes"][0]["scene_name"] == "seed_1"
+    assert not (out / "seed_1" / "pipeline_state").exists()
+
+
+def test_multiple_usd_candidates_prefers_export_scene_usdc(tmp_path: Path) -> None:
+    root = tmp_path / "scenes"
+    preferred = _write_scene(root, "seed_1").scene_usd
+    other = root / "seed_1" / "usd" / "other" / "bigger.usdc"
+    other.parent.mkdir(parents=True)
+    other.write_text("x" * 100, encoding="utf-8")
+
+    report = pipeline.build_scene_discovery_report(
+        scene_root_requested=root,
+        scene_root_resolved=root,
+    )
+
+    assert report["valid_scenes"][0]["scene_usd"] == preferred.as_posix()
+    assert report["valid_scenes"][0]["warnings"] == ["multiple_usd_candidates"]
+
+
+def test_scene_root_fallback_to_host_path_is_preserved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    missing_container = tmp_path / "container_root"
+    host_root = tmp_path / "host_root"
+    host_root.mkdir()
+    monkeypatch.setattr(pipeline, "DEFAULT_SCENE_ROOT", missing_container)
+    monkeypatch.setattr(pipeline, "HOST_SCENE_ROOT_FALLBACK", host_root)
+
+    resolved, note = pipeline.resolve_scene_root(missing_container)
+
+    assert resolved == host_root.resolve()
+    assert note is not None
+    assert "using host fallback" in note
 
 
 def test_missing_scene_root_gives_clear_error(tmp_path: Path) -> None:

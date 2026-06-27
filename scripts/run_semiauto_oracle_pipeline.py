@@ -7,6 +7,7 @@ import argparse
 import fnmatch
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -30,6 +31,7 @@ DEFAULT_ISAAC_PYTHON = Path("/home/ubuntu22/miniconda3/envs/env_isaaclab/bin/pyt
 DEFAULT_BLENDER_BIN = Path("/home/ubuntu22/infinigen/blender/blender")
 DEFAULT_ROS_PYTHON = Path("/usr/bin/python3")
 DEFAULT_ROS_SETUP = Path("/opt/ros/humble/setup.bash")
+USD_SUFFIXES = {".usd", ".usdc"}
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,14 @@ class SceneRecord:
     name: str
     scene_dir: Path
     scene_usd: Path
+
+
+class SceneDiscoveryError(RuntimeError):
+    """Raised when scene discovery cannot produce a runnable scene set."""
+
+    def __init__(self, message: str, report: dict[str, Any]):
+        super().__init__(message)
+        self.report = report
 
 
 @dataclass
@@ -203,67 +213,357 @@ def resolve_scene_root(scene_root: str | Path) -> tuple[Path, str | None]:
     )
 
 
-def discover_scene_usd(scene_dir: str | Path) -> Path | None:
+def natural_sort_key(value: str | Path) -> tuple[Any, ...]:
+    text = Path(value).name if isinstance(value, Path) else str(value)
+    parts = re.split(r"(\d+)", text)
+    return tuple(int(part) if part.isdigit() else part.lower() for part in parts)
+
+
+def _unique_existing_files(paths: Iterable[Path]) -> list[Path]:
+    seen: dict[str, Path] = {}
+    for path in paths:
+        if path.is_file() and path.suffix.lower() in USD_SUFFIXES:
+            seen[path.resolve().as_posix()] = path.resolve()
+    return list(seen.values())
+
+
+def _usd_candidates(scene_dir: Path) -> list[Path]:
+    preferred = [
+        scene_dir / "usd" / "export_scene.blend" / "export_scene.usdc",
+        scene_dir / "usd" / "export_scene.blend" / "export_scene.usd",
+    ]
+    candidates: list[Path] = []
+    candidates.extend(_unique_existing_files(preferred))
+    usd_root = scene_dir / "usd"
+    if usd_root.exists():
+        candidates.extend(_unique_existing_files(usd_root.rglob("*.usdc")))
+        candidates.extend(_unique_existing_files(usd_root.rglob("*.usd")))
+    candidates.extend(_unique_existing_files(scene_dir.rglob("*.usdc")))
+    candidates.extend(_unique_existing_files(scene_dir.rglob("*.usd")))
+    deduped = {candidate.as_posix(): candidate for candidate in candidates}
+    return list(deduped.values())
+
+
+def discover_scene_usd_details(scene_dir: str | Path) -> dict[str, Any]:
     root = Path(scene_dir)
+    candidates = _usd_candidates(root)
     preferred = [
         root / "usd" / "export_scene.blend" / "export_scene.usdc",
         root / "usd" / "export_scene.blend" / "export_scene.usd",
     ]
+    warnings: list[str] = []
+    selected: Path | None = None
+    selected_by: str | None = None
     for path in preferred:
-        if path.is_file():
-            return path.resolve()
-    usd_root = root / "usd"
-    if not usd_root.exists():
-        return None
-    for suffix in ("*.usdc", "*.usd"):
-        candidates = sorted(p for p in usd_root.rglob(suffix) if p.is_file())
-        if candidates:
-            return candidates[0].resolve()
-    return None
+        resolved = path.resolve()
+        if any(candidate == resolved for candidate in candidates):
+            selected = resolved
+            selected_by = f"priority:{path.relative_to(root).as_posix()}"
+            break
+    if selected is None and candidates:
+        usdc = [path for path in candidates if path.suffix.lower() == ".usdc"]
+        pool = usdc if usdc else candidates
+        selected = max(pool, key=lambda p: (p.stat().st_size, natural_sort_key(p.as_posix())))
+        selected_by = "largest_usdc" if usdc else "largest_usd"
+    if len(candidates) > 1:
+        warnings.append("multiple_usd_candidates")
+
+    candidate_records = [
+        {
+            "path": candidate.as_posix(),
+            "selected": selected is not None and candidate == selected,
+            "size_bytes": int(candidate.stat().st_size),
+        }
+        for candidate in sorted(candidates, key=lambda p: (natural_sort_key(p.as_posix()), p.as_posix()))
+    ]
+    return {
+        "candidates": candidate_records,
+        "scene_usd": selected.as_posix() if selected else None,
+        "selected_by": selected_by,
+        "warnings": warnings,
+    }
+
+
+def discover_scene_usd(scene_dir: str | Path) -> Path | None:
+    details = discover_scene_usd_details(scene_dir)
+    scene_usd = details.get("scene_usd")
+    return Path(scene_usd) if scene_usd else None
+
+
+def _scene_candidate_dirs(root: Path, *, scene_id: str | None, scene_glob: str) -> tuple[list[Path], list[str]]:
+    if scene_id:
+        scene_dir = root / scene_id
+        if not scene_dir.is_dir():
+            raise FileNotFoundError(f"Scene id {scene_id!r} does not exist under {root}")
+        return [scene_dir], []
+    candidates: list[Path] = []
+    ignored: list[str] = []
+    for entry in sorted(root.iterdir(), key=natural_sort_key):
+        if entry.is_dir() and entry.name.startswith("seed_") and fnmatch.fnmatch(entry.name, scene_glob):
+            candidates.append(entry)
+        else:
+            ignored.append(entry.name)
+    return candidates, ignored
+
+
+def _incomplete_reason(scene_dir: Path) -> dict[str, Any]:
+    usd_dir = scene_dir / "usd"
+    if usd_dir.exists():
+        return {
+            "reason": "usd_dir_exists_but_no_usd_or_usdc",
+            "usd_dir": usd_dir.resolve().as_posix(),
+        }
+    return {
+        "reason": "no_usd_dir_and_no_usd_or_usdc",
+        "usd_dir": usd_dir.resolve().as_posix(),
+    }
+
+
+def build_scene_discovery_report(
+    *,
+    scene_root_requested: str | Path,
+    scene_root_resolved: str | Path,
+    scene_id: str | None = None,
+    scene_glob: str = "seed_*",
+) -> dict[str, Any]:
+    root = Path(scene_root_resolved)
+    if not root.exists():
+        raise FileNotFoundError(f"Scene root does not exist: {root}")
+    seed_dirs, ignored = _scene_candidate_dirs(root, scene_id=scene_id, scene_glob=scene_glob)
+    valid: list[dict[str, Any]] = []
+    incomplete: list[dict[str, Any]] = []
+    for scene_dir in seed_dirs:
+        details = discover_scene_usd_details(scene_dir)
+        scene_usd = details.get("scene_usd")
+        if scene_usd:
+            record = {
+                "scene_name": scene_dir.name,
+                "scene_dir": scene_dir.resolve().as_posix(),
+                "scene_usd": scene_usd,
+            }
+            if details.get("warnings"):
+                record["warnings"] = details["warnings"]
+            if details.get("selected_by"):
+                record["selected_by"] = details["selected_by"]
+            if details.get("candidates"):
+                record["usd_candidates"] = details["candidates"]
+            valid.append(record)
+        else:
+            record = {
+                "scene_name": scene_dir.name,
+                "scene_dir": scene_dir.resolve().as_posix(),
+                **_incomplete_reason(scene_dir),
+            }
+            incomplete.append(record)
+
+    valid.sort(key=lambda row: natural_sort_key(str(row["scene_name"])))
+    incomplete.sort(key=lambda row: natural_sort_key(str(row["scene_name"])))
+    return {
+        "ignored_entries": sorted(ignored, key=natural_sort_key),
+        "incomplete_seed_dirs": incomplete,
+        "num_ignored_entries": len(ignored),
+        "num_incomplete_seed_dirs": len(incomplete),
+        "num_seed_dirs": len(seed_dirs),
+        "num_valid_scenes": len(valid),
+        "scene_glob": scene_glob,
+        "scene_id": scene_id,
+        "scene_root_requested": Path(scene_root_requested).as_posix(),
+        "scene_root_resolved": root.resolve().as_posix(),
+        "valid_scenes": valid,
+    }
+
+
+def _selected_scene_records_from_report(
+    report: dict[str, Any],
+    *,
+    scene_limit: int | None = None,
+    start_index: int = 0,
+    end_index: int | None = None,
+) -> list[SceneRecord]:
+    rows = list(report.get("valid_scenes") or [])
+    rows.sort(key=lambda row: natural_sort_key(str(row["scene_name"])))
+    start = max(0, int(start_index))
+    if start:
+        rows = rows[start:]
+    if end_index is not None:
+        rows = rows[: max(0, int(end_index) - start)]
+    if scene_limit is not None:
+        rows = rows[: max(0, int(scene_limit))]
+    return [
+        SceneRecord(
+            str(row["scene_name"]),
+            Path(str(row["scene_dir"])),
+            Path(str(row["scene_usd"])),
+        )
+        for row in rows
+    ]
+
+
+def _no_valid_scene_message(report: dict[str, Any]) -> str:
+    root = str(report.get("scene_root_resolved"))
+    lines = [
+        "No valid scene USD/USDC files found.",
+        "",
+        "Checked scene root:",
+        f"  {root}",
+        "",
+        "Found seed dirs:",
+        f"  {report.get('num_seed_dirs', 0)}",
+        "",
+        "Incomplete seed dirs:",
+    ]
+    incomplete = report.get("incomplete_seed_dirs") or []
+    if incomplete:
+        for row in incomplete:
+            reason = str(row.get("reason", "unknown")).replace("_", " ")
+            lines.append(f"  {row.get('scene_name')}: {reason}")
+    else:
+        lines.append("  none")
+    lines.extend(["", "Ignored:"])
+    ignored = report.get("ignored_entries") or []
+    if ignored:
+        lines.extend(f"  {name}" for name in ignored)
+    else:
+        lines.append("  none")
+    lines.extend(
+        [
+            "",
+            "Try:",
+            f'  find {shlex.quote(root)} -type f \\( -name "*.usd" -o -name "*.usdc" \\) -print',
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _incomplete_scene_message(report: dict[str, Any]) -> str:
+    lines = ["Incomplete scene dirs found while --fail-on-incomplete-scenes is enabled:"]
+    for row in report.get("incomplete_seed_dirs") or []:
+        reason = str(row.get("reason", "unknown")).replace("_", " ")
+        lines.append(f"  {row.get('scene_name')}: {reason}")
+    return "\n".join(lines)
+
+
+def select_discovered_scenes(
+    report: dict[str, Any],
+    *,
+    scene_limit: int | None = None,
+    start_index: int = 0,
+    end_index: int | None = None,
+    fail_on_incomplete_scenes: bool = False,
+) -> list[SceneRecord]:
+    if fail_on_incomplete_scenes and report.get("incomplete_seed_dirs"):
+        raise SceneDiscoveryError(_incomplete_scene_message(report), report)
+    scenes = _selected_scene_records_from_report(
+        report,
+        scene_limit=scene_limit,
+        start_index=start_index,
+        end_index=end_index,
+    )
+    if not scenes:
+        raise SceneDiscoveryError(_no_valid_scene_message(report), report)
+    return scenes
+
+
+def _scene_discovery_markdown(report: dict[str, Any], selected: Sequence[SceneRecord] | None = None) -> str:
+    lines = [
+        "# Scene Discovery Report",
+        "",
+        f"- requested root: `{report.get('scene_root_requested')}`",
+        f"- resolved root: `{report.get('scene_root_resolved')}`",
+        f"- seed dirs: `{report.get('num_seed_dirs')}`",
+        f"- valid scenes: `{report.get('num_valid_scenes')}`",
+        f"- incomplete seed dirs: `{report.get('num_incomplete_seed_dirs')}`",
+        f"- ignored entries: `{report.get('num_ignored_entries')}`",
+        "",
+        "## Valid Scenes",
+        "",
+    ]
+    valid = report.get("valid_scenes") or []
+    if valid:
+        for row in valid:
+            warning = f" warnings={row.get('warnings')}" if row.get("warnings") else ""
+            lines.append(f"- `{row['scene_name']}` -> `{row['scene_usd']}`{warning}")
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Skipped Incomplete", ""])
+    incomplete = report.get("incomplete_seed_dirs") or []
+    if incomplete:
+        for row in incomplete:
+            reason = str(row.get("reason", "unknown")).replace("_", " ")
+            lines.append(f"- `{row['scene_name']}` -> {reason}")
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Ignored", ""])
+    ignored = report.get("ignored_entries") or []
+    if ignored:
+        lines.extend(f"- `{name}`" for name in ignored)
+    else:
+        lines.append("- none")
+    if selected is not None:
+        lines.extend(["", "## Selected Scenes", ""])
+        if selected:
+            for scene in selected:
+                lines.append(f"- `{scene.name}` -> `{scene.scene_usd.as_posix()}`")
+        else:
+            lines.append("- none")
+    return "\n".join(lines) + "\n"
+
+
+def write_scene_discovery_report(out_root: str | Path, report: dict[str, Any], selected: Sequence[SceneRecord] | None = None) -> None:
+    out = ensure_dir(out_root)
+    report_to_write = dict(report)
+    if selected is not None:
+        report_to_write["num_selected_scenes"] = len(selected)
+        report_to_write["selected_scenes"] = [
+            {
+                "scene_name": scene.name,
+                "scene_dir": scene.scene_dir.as_posix(),
+                "scene_usd": scene.scene_usd.as_posix(),
+            }
+            for scene in selected
+        ]
+    write_json(out / "scene_discovery_report.json", report_to_write)
+    (out / "scene_discovery_report.md").write_text(_scene_discovery_markdown(report, selected), encoding="utf-8")
+
+
+def print_scene_discovery_summary(report: dict[str, Any], selected: Sequence[SceneRecord] | None = None) -> None:
+    print(
+        "Scene discovery: "
+        f"{report.get('num_valid_scenes', 0)} valid, "
+        f"{report.get('num_incomplete_seed_dirs', 0)} incomplete, "
+        f"{report.get('num_ignored_entries', 0)} ignored"
+    )
+    if selected is not None:
+        print(f"Selected scenes: {len(selected)}")
+        for scene in selected:
+            print(f"  {scene.name}: {scene.scene_usd}")
 
 
 def discover_scenes(
     scene_root: str | Path,
     *,
     scene_id: str | None = None,
-    scene_glob: str = "*",
+    scene_glob: str = "seed_*",
     scene_limit: int | None = None,
     start_index: int = 0,
     end_index: int | None = None,
 ) -> list[SceneRecord]:
     root = Path(scene_root)
-    if not root.exists():
-        raise FileNotFoundError(f"Scene root does not exist: {root}")
-
-    if scene_id:
-        scene_dir = root / scene_id
-        if not scene_dir.is_dir():
-            raise FileNotFoundError(f"Scene id {scene_id!r} does not exist under {root}")
-        usd = discover_scene_usd(scene_dir)
-        if usd is None:
-            raise FileNotFoundError(f"No USD/USDC found for scene {scene_id!r} under {scene_dir / 'usd'}")
-        return [SceneRecord(scene_id, scene_dir.resolve(), usd)]
-
-    scene_dirs = sorted(p for p in root.iterdir() if p.is_dir() and fnmatch.fnmatch(p.name, scene_glob))
-    if start_index:
-        scene_dirs = scene_dirs[max(0, int(start_index)) :]
-    if end_index is not None:
-        scene_dirs = scene_dirs[: max(0, int(end_index) - max(0, int(start_index)))]
-    if scene_limit is not None:
-        scene_dirs = scene_dirs[: max(0, int(scene_limit))]
-
-    records: list[SceneRecord] = []
-    missing: list[str] = []
-    for scene_dir in scene_dirs:
-        usd = discover_scene_usd(scene_dir)
-        if usd is None:
-            missing.append(scene_dir.name)
-            continue
-        records.append(SceneRecord(scene_dir.name, scene_dir.resolve(), usd))
-    if not records:
-        suffix = f"; skipped directories without USD: {', '.join(missing[:10])}" if missing else ""
-        raise FileNotFoundError(f"No scene USD/USDC files found under {root}{suffix}")
-    return records
+    report = build_scene_discovery_report(
+        scene_root_requested=root,
+        scene_root_resolved=root,
+        scene_id=scene_id,
+        scene_glob=scene_glob,
+    )
+    try:
+        return select_discovered_scenes(
+            report,
+            scene_limit=scene_limit,
+            start_index=start_index,
+            end_index=end_index,
+        )
+    except SceneDiscoveryError as exc:
+        raise FileNotFoundError(str(exc)) from exc
 
 
 def _state_paths(scene_out: Path) -> tuple[Path, Path]:
@@ -1605,7 +1905,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out-root", default=DEFAULT_OUT_ROOT.as_posix())
     parser.add_argument("--scene-id", default=None)
     parser.add_argument("--scene-limit", type=int, default=None)
-    parser.add_argument("--scene-glob", default="*")
+    parser.add_argument("--scene-glob", default="seed_*")
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--end-index", type=int, default=None)
     parser.add_argument("--stage", default="all")
@@ -1615,6 +1915,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--stop-at-human-review", action="store_true")
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--skip-doorway-override", action="store_true")
+    parser.add_argument("--allow-incomplete-scenes", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--fail-on-incomplete-scenes", action="store_true")
+    parser.add_argument("--list-scenes-only", action="store_true")
     parser.add_argument("--isaac-python", default=DEFAULT_ISAAC_PYTHON.as_posix())
     parser.add_argument("--blender-bin", default=DEFAULT_BLENDER_BIN.as_posix())
     parser.add_argument("--ros-python", default=DEFAULT_ROS_PYTHON.as_posix())
@@ -1624,6 +1927,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    requested_scene_root = args.scene_root
     try:
         scene_root, note = resolve_scene_root(args.scene_root)
         args.scene_root = scene_root.as_posix()
@@ -1636,19 +1940,43 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(note)
         stages = selected_stage_keys(args.stage)
         print(f"Selected stages: {', '.join(stages)}")
-        scenes = discover_scenes(
-            scene_root,
+        report = build_scene_discovery_report(
+            scene_root_requested=requested_scene_root,
+            scene_root_resolved=scene_root,
             scene_id=args.scene_id,
             scene_glob=args.scene_glob,
+        )
+        selected = _selected_scene_records_from_report(
+            report,
             scene_limit=args.scene_limit,
             start_index=args.start_index,
             end_index=args.end_index,
         )
+        write_scene_discovery_report(args.out_root, report, selected)
+        print_scene_discovery_summary(report, selected)
+        strict_incomplete = bool(args.fail_on_incomplete_scenes or not args.allow_incomplete_scenes)
+        if args.list_scenes_only:
+            if strict_incomplete and report.get("incomplete_seed_dirs"):
+                print(_incomplete_scene_message(report), file=sys.stderr)
+                return 2
+            if not report.get("valid_scenes"):
+                print(_no_valid_scene_message(report), file=sys.stderr)
+                return 2
+            return 0
+        scenes = select_discovered_scenes(
+            report,
+            scene_limit=args.scene_limit,
+            start_index=args.start_index,
+            end_index=args.end_index,
+            fail_on_incomplete_scenes=strict_incomplete,
+        )
+    except SceneDiscoveryError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     except Exception as exc:
         print(f"pipeline setup failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
 
-    ensure_dir(args.out_root)
     scene_status: dict[str, str] = {}
     for scene in scenes:
         status = run_scene(args, scene)
